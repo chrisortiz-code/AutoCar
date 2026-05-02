@@ -149,11 +149,10 @@ MOVE_TIMEOUT = 30         # seconds — safety timeout
 RAMP_PCT = 0.15           # ramp over first/last 15% of each wheel's travel
 
 def _command_vel(nid, velocity):
-    """Command a single motor velocity (with direction flip)."""
+    """Command a single motor velocity (already in encoder space)."""
     if nid not in connected:
         return
-    actual = velocity * MOTORS[nid]["dir"]
-    send_can(nid, CMD_SET_INPUT_VEL, struct.pack('<ff', actual, 0.0))
+    send_can(nid, CMD_SET_INPUT_VEL, struct.pack('<ff', velocity, 0.0))
 
 def _vel_for_wheel(nid, current, start, goal, max_vel):
     """Compute velocity based on position within the move.

@@ -138,11 +138,14 @@ def mecanum_speeds(vx, vy, omega):
 
 moving = False
 
-TURNS_PER_DEG = 0.067     # wheel turns per degree of robot rotation — tune this
+WHEEL_DIAMETER = 11.75     # cm
+GEAR_RATIO = 16.0 / 90.0  # motor:wheel
+CM_PER_MOTOR_REV = GEAR_RATIO * math.pi * WHEEL_DIAMETER  # ~6.562 cm
+MOTOR_REVS_PER_CM = 1.0 / CM_PER_MOTOR_REV               # ~0.1524
+
+TURNS_PER_DEG = 0.067     # motor turns per degree of robot rotation — tune this
 POS_TOLERANCE = 0.1       # turns — how close to target before "done"
 MOVE_TIMEOUT = 30         # seconds — safety timeout
-TRANS_VEL = 3.0           # default translation wheel speed (turns/s)
-ROT_VEL = 3.0             # default rotation wheel speed (turns/s)
 
 def _command_vel(nid, velocity):
     """Command a single motor velocity (with direction flip)."""
@@ -240,7 +243,8 @@ def get_status():
 def move_polar():
     global moving
     data = request.json
-    magnitude = float(data.get("r", 0))        # distance in wheel turns
+    distance_cm = float(data.get("r", 0))       # distance in cm
+    magnitude = distance_cm * MOTOR_REVS_PER_CM  # convert to motor revolutions
     theta_deg = float(data.get("theta", 0))     # direction (0=forward, CW)
     omega_deg = float(data.get("omega", 0))     # total rotation in degrees
     vel_pct   = float(data.get("vel_pct", 30))  # speed %
@@ -264,7 +268,7 @@ def move_polar():
     # --- Combined: each wheel's total turns to move ---
     targets = {nid: trans_targets[nid] + rot_targets[nid] for nid in ALL_IDS}
 
-    print(f"\nCommand: mag={magnitude:.2f} theta={theta_deg:.1f} rot={omega_deg:.0f}deg vel={vel_pct}%")
+    print(f"\nCommand: {distance_cm:.0f}cm ({magnitude:.2f} revs) theta={theta_deg:.1f} rot={omega_deg:.0f}deg vel={vel_pct}%")
     for nid in sorted(ALL_IDS):
         print(f"  node {nid} ({MOTORS[nid]['role']}): trans={trans_targets[nid]:+.2f} rot={rot_targets[nid]:+.2f} total={targets[nid]:+.2f} turns")
 

@@ -146,6 +146,7 @@ MOTOR_REVS_PER_CM = 1.0 / CM_PER_MOTOR_REV               # ~0.1524
 TURNS_PER_DEG = 0.067     # motor turns per degree of robot rotation — tune this
 POS_TOLERANCE = 0.1       # turns — how close to target before "done"
 MOVE_TIMEOUT = 30         # seconds — safety timeout
+RAMP_PCT = 0.15           # ramp over first/last 15% of each wheel's travel
 
 def _command_vel(nid, velocity):
     """Command a single motor velocity (with direction flip)."""
@@ -154,9 +155,35 @@ def _command_vel(nid, velocity):
     actual = velocity * MOTORS[nid]["dir"]
     send_can(nid, CMD_SET_INPUT_VEL, struct.pack('<ff', actual, 0.0))
 
+def _vel_for_wheel(nid, current, start, goal, max_vel):
+    """Compute velocity based on position within the move.
+    Ramps up over first RAMP_PCT, cruises, ramps down over last RAMP_PCT."""
+    total = abs(goal - start)
+    if total < 0.01:
+        return 0.0
+
+    traveled = abs(current - start)
+    remaining = abs(goal - current)
+    direction = 1.0 if goal > start else -1.0
+
+    # What fraction of the move are we at?
+    ramp_dist = total * RAMP_PCT
+    ramp_dist = max(ramp_dist, 0.3)  # at least 0.3 turns of ramp
+
+    if traveled < ramp_dist:
+        # Accelerating — scale from 10% to 100%
+        frac = 0.1 + 0.9 * (traveled / ramp_dist)
+    elif remaining < ramp_dist:
+        # Decelerating — scale from 100% down to 10%
+        frac = 0.1 + 0.9 * (remaining / ramp_dist)
+    else:
+        frac = 1.0
+
+    return direction * max_vel * frac
+
 def _run_move(targets, vel_pct):
     """
-    targets: {nid: total_turns_to_move} (signed, direction-independent — dir flip in _command_vel)
+    targets: {nid: total_turns_to_move} (signed)
     vel_pct: speed as percentage of MAX_VEL
     """
     global moving
@@ -171,25 +198,11 @@ def _run_move(targets, vel_pct):
         if nid in connected:
             arm(nid)
 
-    # Record start positions
+    # Record start positions and goals
     start_pos = {nid: positions.get(nid, 0.0) for nid in targets}
     goal_pos = {nid: start_pos[nid] + targets[nid] * MOTORS[nid]["dir"] for nid in targets}
 
-    # Compute velocity direction per wheel
-    vel_dir = {}
-    for nid in targets:
-        if abs(targets[nid]) < 0.001:
-            vel_dir[nid] = 0.0
-        else:
-            vel_dir[nid] = vel_scale if targets[nid] > 0 else -vel_scale
-
-    # Command initial velocities
-    for nid in targets:
-        if nid in connected:
-            _command_vel(nid, vel_dir[nid])
-
-    # Monitor encoder positions
-    done = {nid: False for nid in targets}
+    done = {nid: abs(targets[nid]) < 0.01 for nid in targets}
     start_time = time.time()
     tick = 0
 
@@ -201,17 +214,15 @@ def _run_move(targets, vel_pct):
             if done[nid]:
                 continue
             current = positions.get(nid, 0.0)
-            remaining = goal_pos[nid] - current
-            if abs(remaining) < POS_TOLERANCE:
-                # Reached target — stop this wheel
+            remaining = abs(goal_pos[nid] - current)
+
+            if remaining < POS_TOLERANCE:
                 _command_vel(nid, 0.0)
                 done[nid] = True
-                print(f"  node {nid} ({MOTORS[nid]['role']}): reached target ({current:.3f})")
-            elif abs(remaining) < 1.0:
-                # Close — slow down proportionally
-                slow_vel = vel_dir[nid] * (abs(remaining) / 1.0)
-                slow_vel = max(abs(slow_vel), 0.5) * (1 if slow_vel >= 0 else -1)
-                _command_vel(nid, slow_vel)
+                print(f"  node {nid} ({MOTORS[nid]['role']}): reached ({current:.3f})")
+            else:
+                vel = _vel_for_wheel(nid, current, start_pos[nid], goal_pos[nid], vel_scale)
+                _command_vel(nid, vel)
 
         if tick % 20 == 0:
             cur_str = "  ".join(

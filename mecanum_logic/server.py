@@ -141,7 +141,7 @@ moving = False
 RAMP_TIME = 0.3
 RAMP_STEPS = 10
 ROT_RATE = 90.0           # degrees per second of robot rotation
-ROT_WHEEL_SPEED = 3.0     # wheel turns/s during rotation — tune until 180deg is accurate
+ROT_WHEEL_SPEED = 6.0     # wheel turns/s during rotation — tune until 180deg is accurate
 
 def _command_all(trans_speeds, trans_scale, rot_speeds, rot_scale):
     """Command each motor with translation + rotation velocities summed."""

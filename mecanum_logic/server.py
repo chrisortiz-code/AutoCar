@@ -75,20 +75,27 @@ def connect_can():
     try:
         bus = can.Bus(interface='gs_usb', channel=0, bitrate=1000000)
         print("CAN bus connected!")
-        print("Listening for ODrives (3s)...")
 
-        start = time.time()
-        seen = set()
-        while time.time() - start < 3:
-            msg = bus.recv(timeout=0.5)
-            if msg:
-                node_id = msg.arbitration_id >> 5
-                if node_id in MOTORS and node_id not in seen:
-                    seen.add(node_id)
-                    connected.add(node_id)
-                    print(f"  Found node {node_id} = {MOTORS[node_id]['role']}")
+        # Retry scan until we find at least 1 ODrive
+        for attempt in range(5):
+            print(f"Scanning for ODrives (attempt {attempt+1}/5)...")
+            start = time.time()
+            while time.time() - start < 3:
+                msg = bus.recv(timeout=0.5)
+                if msg:
+                    node_id = msg.arbitration_id >> 5
+                    if node_id in MOTORS and node_id not in connected:
+                        connected.add(node_id)
+                        print(f"  Found node {node_id} = {MOTORS[node_id]['role']}")
+            if connected:
+                break
+            print("  No ODrives yet, retrying...")
 
         print(f"Connected: {sorted(connected)}")
+        if not connected:
+            print("WARNING: No ODrives found. Server will start but motors won't work.")
+            print("  Check: ODrives powered? CAN wiring? Correct bitrate?")
+
         threading.Thread(target=can_listener, daemon=True).start()
 
     except Exception as e:
@@ -196,18 +203,19 @@ def move_polar():
     if duration <= 0:
         return jsonify({"ok": False, "error": "magnitude must be > 0"})
 
-    theta = math.radians(theta_deg)
+    theta = math.radians(-theta_deg)
     vx = math.cos(theta)
     vy = math.sin(theta)
 
-    # omega comes in as total degrees of rotation
-    # convert to rotational velocity: degrees / duration, then scale to wheel contribution
-    omega_vel = (omega / duration) / 72.0  # same /72 scaling the HTML used to do
+    # omega = total degrees of rotation over the move
+    # normalize so 360 deg over duration produces omega_vel=1.0
+    # this makes rotation contribute equally to translation in the mecanum formula
+    omega_vel = (omega / duration) / 360.0
 
     speeds    = mecanum_speeds(vx, vy, omega_vel)
     vel_scale = (vel_pct / 100.0) * MAX_VEL
 
-    print(f"\nCommand: dur={duration:.1f}s theta={theta_deg} rot={omega:.0f}deg omega_vel={omega_vel:.3f} vel={vel_pct}%")
+    print(f"\nCommand: dur={duration:.1f}s theta={theta_deg:.1f} rot={omega:.0f}deg omega_vel={omega_vel:.3f} vel={vel_pct}%")
 
     moving = True
     threading.Thread(target=_run_move, args=(speeds, vel_scale, duration), daemon=True).start()
@@ -247,20 +255,29 @@ def wheel_status():
     })
 
 def shutdown_motors():
-    print("\nSetting all motors to idle...")
-    for nid in ALL_IDS:
-        try:
-            send_can(nid, CMD_SET_INPUT_VEL, struct.pack('<ff', 0.0, 0.0))
-            time.sleep(0.02)
-            send_can(nid, CMD_SET_AXIS_STATE, struct.pack('<I', 1))
-        except:
-            pass
+    print("\nShutting down...")
     if bus:
+        for nid in ALL_IDS:
+            try:
+                msg = can.Message(
+                    arbitration_id=(nid << 5) | CMD_SET_INPUT_VEL,
+                    data=struct.pack('<ff', 0.0, 0.0),
+                    is_extended_id=False,
+                )
+                bus.send(msg, timeout=0.1)
+                msg = can.Message(
+                    arbitration_id=(nid << 5) | CMD_SET_AXIS_STATE,
+                    data=struct.pack('<I', 1),
+                    is_extended_id=False,
+                )
+                bus.send(msg, timeout=0.1)
+            except:
+                pass
         try:
             bus.shutdown()
         except:
             pass
-    print("CAN adapter released.")
+    print("Done.")
 
 if __name__ == "__main__":
     import atexit, signal

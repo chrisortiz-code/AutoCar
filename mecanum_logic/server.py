@@ -131,6 +131,17 @@ def mecanum_speeds(vx, vy, omega):
 
 moving = False
 
+RAMP_TIME = 0.3   # seconds to accelerate/decelerate
+RAMP_STEPS = 10   # number of steps in each ramp
+
+def _set_all_vel(speeds, vel_scale, frac):
+    """Command all motors at frac (0.0-1.0) of target velocity."""
+    for nid, spd in speeds.items():
+        if nid in connected:
+            v = spd * vel_scale * frac
+            actual = v * MOTORS[nid]["dir"]
+            send_can(nid, CMD_SET_INPUT_VEL, struct.pack('<ff', actual, 0.0))
+
 def _run_move(speeds, vel_scale, duration):
     global moving
     # Arm all motors first
@@ -138,17 +149,26 @@ def _run_move(speeds, vel_scale, duration):
         if nid in connected:
             arm(nid)
 
-    # Then command all velocities together
-    for nid, spd in speeds.items():
-        if nid in connected:
-            set_vel(nid, spd * vel_scale)
+    # Accelerate
+    print("  Ramping up...")
+    step_dt = RAMP_TIME / RAMP_STEPS
+    for i in range(1, RAMP_STEPS + 1):
+        _set_all_vel(speeds, vel_scale, i / RAMP_STEPS)
+        time.sleep(step_dt)
 
-    # Print current (amps) 10 times during move
-    interval = duration / 10.0
+    # Cruise — print current 10 times
+    cruise_time = max(duration - 2 * RAMP_TIME, 0.1)
+    interval = cruise_time / 10.0
     for i in range(10):
         time.sleep(interval)
         cur_str = "  ".join(f"{nid}({MOTORS[nid]['role']}):{currents[nid]:+.3f}A" for nid in sorted(speeds.keys()))
         print(f"  [{i+1}/10] {cur_str}")
+
+    # Decelerate
+    print("  Ramping down...")
+    for i in range(RAMP_STEPS - 1, -1, -1):
+        _set_all_vel(speeds, vel_scale, i / RAMP_STEPS)
+        time.sleep(step_dt)
 
     for nid in speeds:
         if nid in connected:
@@ -180,10 +200,14 @@ def move_polar():
     vx = math.cos(theta)
     vy = math.sin(theta)
 
-    speeds    = mecanum_speeds(vx, vy, omega)
+    # omega comes in as total degrees of rotation
+    # convert to rotational velocity: degrees / duration, then scale to wheel contribution
+    omega_vel = (omega / duration) / 72.0  # same /72 scaling the HTML used to do
+
+    speeds    = mecanum_speeds(vx, vy, omega_vel)
     vel_scale = (vel_pct / 100.0) * MAX_VEL
 
-    print(f"\nCommand: dur={duration:.1f}s theta={theta_deg} omega={omega:.2f} vel={vel_pct}%")
+    print(f"\nCommand: dur={duration:.1f}s theta={theta_deg} rot={omega:.0f}deg omega_vel={omega_vel:.3f} vel={vel_pct}%")
 
     moving = True
     threading.Thread(target=_run_move, args=(speeds, vel_scale, duration), daemon=True).start()

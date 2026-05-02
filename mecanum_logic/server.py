@@ -140,7 +140,8 @@ moving = False
 
 RAMP_TIME = 0.3
 RAMP_STEPS = 10
-ROT_RATE = 36.0   # degrees per second (5s per 180deg)
+ROT_RATE = 90.0           # degrees per second of robot rotation
+ROT_WHEEL_SPEED = 3.0     # wheel turns/s during rotation — tune until 180deg is accurate
 
 def _command_all(trans_speeds, trans_scale, rot_speeds, rot_scale):
     """Command each motor with translation + rotation velocities summed."""
@@ -238,8 +239,8 @@ def move_polar():
     # --- Rotation ---
     rot_dur = abs(omega_deg) / ROT_RATE if abs(omega_deg) > 0.1 else 0
     rot_sign = 1.0 if omega_deg >= 0 else -1.0
-    rot_speeds = mecanum_speeds(0, 0, rot_sign) # pure rotation, no translation
-    rot_vel = (abs(omega_deg) / rot_dur / 360.0) * MAX_VEL if rot_dur > 0 else 0
+    rot_speeds = mecanum_speeds(0, 0, rot_sign) # pure rotation, unit speeds ±1
+    rot_vel = ROT_WHEEL_SPEED                   # direct wheel speed for rotation
 
     total_dur = max(trans_dur, rot_dur)
 

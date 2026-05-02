@@ -138,46 +138,69 @@ def mecanum_speeds(vx, vy, omega):
 
 moving = False
 
-RAMP_TIME = 0.3   # seconds to accelerate/decelerate
-RAMP_STEPS = 10   # number of steps in each ramp
+RAMP_TIME = 0.3
+RAMP_STEPS = 10
+ROT_RATE = 36.0   # degrees per second (5s per 180deg)
 
-def _set_all_vel(speeds, vel_scale, frac):
-    """Command all motors at frac (0.0-1.0) of target velocity."""
-    for nid, spd in speeds.items():
-        if nid in connected:
-            v = spd * vel_scale * frac
-            actual = v * MOTORS[nid]["dir"]
-            send_can(nid, CMD_SET_INPUT_VEL, struct.pack('<ff', actual, 0.0))
+def _command_all(trans_speeds, trans_scale, rot_speeds, rot_scale):
+    """Command each motor with translation + rotation velocities summed."""
+    for nid in ALL_IDS:
+        if nid not in connected:
+            continue
+        v = trans_speeds.get(nid, 0) * trans_scale + rot_speeds.get(nid, 0) * rot_scale
+        actual = v * MOTORS[nid]["dir"]
+        send_can(nid, CMD_SET_INPUT_VEL, struct.pack('<ff', actual, 0.0))
 
-def _run_move(speeds, vel_scale, duration):
+def _run_move(trans_speeds, trans_vel, rot_speeds, rot_vel, trans_dur, rot_dur):
     global moving
-    # Arm all motors first
-    for nid in speeds:
+    total_dur = max(trans_dur, rot_dur)
+    if total_dur <= 0:
+        moving = False
+        return
+
+    # Arm all motors
+    for nid in ALL_IDS:
         if nid in connected:
             arm(nid)
 
-    # Accelerate
-    print("  Ramping up...")
+    # Ramp up
     step_dt = RAMP_TIME / RAMP_STEPS
     for i in range(1, RAMP_STEPS + 1):
-        _set_all_vel(speeds, vel_scale, i / RAMP_STEPS)
+        frac = i / RAMP_STEPS
+        t_s = trans_vel * frac if trans_dur > 0 else 0
+        r_s = rot_vel * frac if rot_dur > 0 else 0
+        _command_all(trans_speeds, t_s, rot_speeds, r_s)
         time.sleep(step_dt)
 
-    # Cruise — print current 10 times
-    cruise_time = max(duration - 2 * RAMP_TIME, 0.1)
-    interval = cruise_time / 10.0
-    for i in range(10):
-        time.sleep(interval)
-        cur_str = "  ".join(f"{nid}({MOTORS[nid]['role']}):{currents[nid]:+.3f}A" for nid in sorted(speeds.keys()))
-        print(f"  [{i+1}/10] {cur_str}")
+    # Main loop: update at 20Hz, drop each component when its time is up
+    elapsed = RAMP_TIME
+    tick = 0
+    while elapsed < total_dur - RAMP_TIME:
+        dt = 0.05
+        time.sleep(dt)
+        elapsed += dt
 
-    # Decelerate
-    print("  Ramping down...")
+        t_on = elapsed < trans_dur - RAMP_TIME if trans_dur > 0 else False
+        r_on = elapsed < rot_dur - RAMP_TIME if rot_dur > 0 else False
+
+        t_s = trans_vel if t_on else 0
+        r_s = rot_vel if r_on else 0
+        _command_all(trans_speeds, t_s, rot_speeds, r_s)
+
+        tick += 1
+        if tick % 20 == 0:  # print current every ~1s
+            cur_str = "  ".join(f"{nid}({MOTORS[nid]['role']}):{currents[nid]:+.3f}A" for nid in sorted(ALL_IDS))
+            print(f"  [{elapsed:.1f}/{total_dur:.1f}s] {cur_str}")
+
+    # Ramp down whatever is still active
     for i in range(RAMP_STEPS - 1, -1, -1):
-        _set_all_vel(speeds, vel_scale, i / RAMP_STEPS)
+        frac = i / RAMP_STEPS
+        t_s = trans_vel * frac if elapsed < trans_dur else 0
+        r_s = rot_vel * frac if elapsed < rot_dur else 0
+        _command_all(trans_speeds, t_s, rot_speeds, r_s)
         time.sleep(step_dt)
 
-    for nid in speeds:
+    for nid in ALL_IDS:
         if nid in connected:
             stop(nid)
     moving = False
@@ -195,35 +218,48 @@ def get_status():
 def move_polar():
     global moving
     data = request.json
-    duration  = float(data.get("r", 0))
-    theta_deg = float(data.get("theta", 0))
-    omega     = float(data.get("omega", 0))
-    vel_pct   = float(data.get("vel_pct", 30))
+    magnitude = float(data.get("r", 0))        # distance in turns
+    theta_deg = float(data.get("theta", 0))     # direction (0=forward, CW)
+    omega_deg = float(data.get("omega", 0))     # total rotation in degrees
+    vel_pct   = float(data.get("vel_pct", 30))  # translation speed %
 
-    if duration <= 0:
-        return jsonify({"ok": False, "error": "magnitude must be > 0"})
+    if magnitude <= 0 and abs(omega_deg) < 0.1:
+        return jsonify({"ok": False, "error": "need magnitude or rotation"})
+
+    # --- Translation ---
+    trans_vel = (vel_pct / 100.0) * MAX_VEL     # turns/s
+    trans_dur = magnitude / trans_vel if magnitude > 0 and trans_vel > 0 else 0
 
     theta = math.radians(-theta_deg)
     vx = math.cos(theta)
     vy = math.sin(theta)
+    trans_speeds = mecanum_speeds(vx, vy, 0)    # pure translation, no rotation
 
-    # omega = total degrees of rotation over the move
-    # normalize so 360 deg over duration produces omega_vel=1.0
-    # this makes rotation contribute equally to translation in the mecanum formula
-    omega_vel = (omega / duration) / 360.0
+    # --- Rotation ---
+    rot_dur = abs(omega_deg) / ROT_RATE if abs(omega_deg) > 0.1 else 0
+    rot_sign = 1.0 if omega_deg >= 0 else -1.0
+    rot_speeds = mecanum_speeds(0, 0, rot_sign) # pure rotation, no translation
+    rot_vel = (abs(omega_deg) / rot_dur / 360.0) * MAX_VEL if rot_dur > 0 else 0
 
-    speeds    = mecanum_speeds(vx, vy, omega_vel)
-    vel_scale = (vel_pct / 100.0) * MAX_VEL
+    total_dur = max(trans_dur, rot_dur)
 
-    print(f"\nCommand: dur={duration:.1f}s theta={theta_deg:.1f} rot={omega:.0f}deg omega_vel={omega_vel:.3f} vel={vel_pct}%")
+    print(f"\nCommand: mag={magnitude:.2f} theta={theta_deg:.1f} rot={omega_deg:.0f}deg")
+    print(f"  Translation: {trans_vel:.2f} t/s for {trans_dur:.2f}s")
+    print(f"  Rotation:    {rot_vel:.2f} t/s for {rot_dur:.2f}s")
+    print(f"  Total:       {total_dur:.2f}s")
 
     moving = True
-    threading.Thread(target=_run_move, args=(speeds, vel_scale, duration), daemon=True).start()
+    threading.Thread(
+        target=_run_move,
+        args=(trans_speeds, trans_vel, rot_speeds, rot_vel, trans_dur, rot_dur),
+        daemon=True
+    ).start()
 
     return jsonify({
         "ok": True,
-        "speeds": {nid: round(v * vel_scale, 3) for nid, v in speeds.items()},
-        "duration": duration,
+        "trans_dur": round(trans_dur, 3),
+        "rot_dur": round(rot_dur, 3),
+        "total_dur": round(total_dur, 3),
     })
 
 @app.route("/stop", methods=["POST"])

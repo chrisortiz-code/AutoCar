@@ -154,6 +154,18 @@ def _command_vel(nid, velocity):
         return
     send_can(nid, CMD_SET_INPUT_VEL, struct.pack('<ff', velocity, 0.0))
 
+def request_iq(nid):
+    """Request current (Iq) measurement from an ODrive via RTR."""
+    if bus is None or nid not in connected:
+        return
+    try:
+        bus.send(can.Message(
+            arbitration_id=(nid << 5) | CMD_GET_IQ,
+            is_remote_frame=True, is_extended_id=False, dlc=8,
+        ))
+    except:
+        pass
+
 def _vel_for_wheel(nid, current, start, goal, max_vel):
     """Compute velocity based on position within the move.
     Ramps up over first RAMP_PCT, cruises, ramps down over last RAMP_PCT."""
@@ -205,6 +217,12 @@ def _run_move(targets, vel_pct):
     start_time = time.time()
     tick = 0
 
+    # Kick all motors simultaneously before entering the loop
+    for nid in targets:
+        if not done[nid]:
+            vel = _vel_for_wheel(nid, start_pos[nid], start_pos[nid], goal_pos[nid], vel_scale)
+            _command_vel(nid, vel)
+
     while not all(done.values()):
         time.sleep(0.05)
         tick += 1
@@ -223,12 +241,15 @@ def _run_move(targets, vel_pct):
                 vel = _vel_for_wheel(nid, current, start_pos[nid], goal_pos[nid], vel_scale)
                 _command_vel(nid, vel)
 
-        if tick % 20 == 0:
-            cur_str = "  ".join(
-                f"{nid}({MOTORS[nid]['role']}):{positions.get(nid,0):+.3f}/{goal_pos[nid]:+.3f}"
+        # Request current data & print status every ~0.2s (4 ticks)
+        if tick % 4 == 0:
+            for nid in targets:
+                request_iq(nid)
+            status = "  ".join(
+                f"{nid}({MOTORS[nid]['role']}):{positions.get(nid,0):+.3f}/{goal_pos[nid]:+.3f} {currents.get(nid,0):.2f}A"
                 for nid in sorted(targets.keys())
             )
-            print(f"  {cur_str}")
+            print(f"  {status}")
 
         if time.time() - start_time > MOVE_TIMEOUT:
             print("  TIMEOUT — stopping all")

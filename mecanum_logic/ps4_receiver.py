@@ -146,12 +146,26 @@ def mecanum_speeds(vx, vy, omega):
 
 
 # ── Drive from packet ───────────────────────────────────────────────
-def drive(vx, vy, omega, speed):
-    """Set motor velocities from direction + speed."""
-    speeds = mecanum_speeds(vx, vy, omega)
-    max_s = max(abs(v) for v in speeds.values()) or 1.0
+def drive(vx, vy, trans_speed, rot_speed):
+    """Set motor velocities. Translation and rotation add independently."""
+    # Translation component (left stick)
+    trans = {nid: 0.0 for nid in ALL_IDS}
+    if trans_speed > 0.01:
+        raw = mecanum_speeds(vx, vy, 0)
+        max_t = max(abs(v) for v in raw.values()) or 1.0
+        trans = {nid: (raw[nid] / max_t) * trans_speed for nid in ALL_IDS}
+
+    # Rotation component (right stick) — normalized independently
+    rot = {nid: 0.0 for nid in ALL_IDS}
+    if abs(rot_speed) > 0.01:
+        raw = mecanum_speeds(0, 0, 1.0)
+        max_r = max(abs(v) for v in raw.values()) or 1.0
+        rot = {nid: (raw[nid] / max_r) * rot_speed for nid in ALL_IDS}
+
+    # Add and clamp to MAX_VEL
     for nid in ALL_IDS:
-        vel = (speeds[nid] / max_s) * speed
+        vel = trans[nid] + rot[nid]
+        vel = max(-MAX_VEL, min(MAX_VEL, vel))
         command_vel(nid, vel)
 
 
@@ -187,9 +201,9 @@ def main():
             cmd = chr(data[0])
 
             if cmd == 'D':
-                # Drive: 4 floats
-                vx, vy, omega, speed = struct.unpack('<ffff', data[1:17])
-                drive(vx, vy, omega, speed)
+                # Drive: 4 floats (vx, vy, trans_speed, rot_speed)
+                vx, vy, trans_speed, rot_speed = struct.unpack('<ffff', data[1:17])
+                drive(vx, vy, trans_speed, rot_speed)
                 if not driving:
                     print(f"Driving (from {addr[0]})")
                 driving = True

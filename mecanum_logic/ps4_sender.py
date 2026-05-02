@@ -31,10 +31,10 @@ BTN_X       = 0
 BTN_OPTIONS = 6
 
 # ── Packet types ────────────────────────────────────────────────────
-# D + 4 floats (vx, vy, omega, top_speed)  = drive
-# S                                         = stop (sticks centered)
-# E                                         = e-stop
-# Q                                         = quit / shutdown
+# D + 4 floats (vx, vy, trans_speed, rot_speed)  = drive
+# S                                                = stop (sticks centered)
+# E                                                = e-stop
+# Q                                                = quit / shutdown
 
 def apply_deadzone(value):
     if abs(value) < DEADZONE:
@@ -60,7 +60,8 @@ def main():
     print(f"Controller: {js.get_name()}")
     print(f"Sending to {JETSON_IP}:{JETSON_PORT}")
     print("─" * 50)
-    print("  Left stick  = drive (magnitude = speed)")
+    print("  Left stick  = translate (magnitude = speed)")
+    print("  Right stick = rotate (left/right)")
     print("  R2 trigger  = sprint")
     print("  X button    = e-stop")
     print("  Options     = quit")
@@ -94,18 +95,24 @@ def main():
             # ── Sticks ──
             lx = apply_deadzone(js.get_axis(AXIS_LX))
             ly = apply_deadzone(js.get_axis(AXIS_LY))
-            magnitude = min(1.0, math.hypot(lx, ly))
+            rx = apply_deadzone(js.get_axis(AXIS_RX))
+            t_mag = min(1.0, math.hypot(lx, ly))
 
             # R2: -1 released → +1 pressed → normalize 0–1
             r2 = max(0.0, (js.get_axis(AXIS_R2) + 1.0) / 2.0)
             top_speed = BASE_VEL + r2 * (SPRINT_VEL - BASE_VEL)
 
-            if magnitude > 0.01:
+            # translation from left stick, rotation from right stick
+            trans_speed = t_mag * top_speed
+            rot_speed = rx * top_speed   # signed: right = positive
+
+            has_input = t_mag > 0.01 or abs(rx) > 0.01
+
+            if has_input:
                 vx = -ly   # up = forward
                 vy = lx    # right = strafe right
-                omega = 0.0  # rotation disabled for now
 
-                pkt = b'D' + struct.pack('<ffff', vx, vy, omega, top_speed * magnitude)
+                pkt = b'D' + struct.pack('<ffff', vx, vy, trans_speed, rot_speed)
                 sock.sendto(pkt, dest)
 
                 if not was_moving:
@@ -113,7 +120,8 @@ def main():
                 was_moving = True
 
                 sprint_tag = " [SPRINT]" if r2 > 0.3 else ""
-                print(f"  vx={vx:+.2f} vy={vy:+.2f} mag={magnitude:.2f} spd={top_speed:.1f}{sprint_tag}   ", end="\r")
+                rot_tag = f" rot={rot_speed:+.1f}" if abs(rx) > 0.01 else ""
+                print(f"  vx={vx:+.2f} vy={vy:+.2f} spd={trans_speed:.1f}{rot_tag}{sprint_tag}   ", end="\r")
             else:
                 if was_moving:
                     sock.sendto(b'S', dest)

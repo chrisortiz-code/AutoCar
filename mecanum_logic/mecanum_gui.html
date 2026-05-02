@@ -1,0 +1,587 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+<title>Mecanum FL Controller</title>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@300;400;500&display=swap');
+  :root {
+    --bg: #0e0e0f; --surface: #161618; --surface2: #1e1e21;
+    --border: rgba(255,255,255,0.07); --border2: rgba(255,255,255,0.13);
+    --text: #e8e8e6; --muted: #6b6b68;
+    --blue: #4d9ef7; --blue-dim: rgba(77,158,247,0.15);
+    --orange: #f07d3a; --orange-dim: rgba(240,125,58,0.15);
+    --green: #3ecf7a; --green-dim: rgba(62,207,122,0.12);
+    --red: #f25f5c; --red-dim: rgba(242,95,92,0.15);
+    --mono: 'IBM Plex Mono', monospace; --sans: 'IBM Plex Sans', sans-serif;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { background: var(--bg); color: var(--text); font-family: var(--sans); font-size: 14px; min-height: 100vh; padding: 24px; }
+  header { display: flex; align-items: baseline; gap: 16px; margin-bottom: 24px; border-bottom: 0.5px solid var(--border); padding-bottom: 16px; }
+  header h1 { font-size: 15px; font-weight: 500; font-family: var(--mono); letter-spacing: 0.02em; }
+  .status-pill { font-family: var(--mono); font-size: 11px; padding: 3px 10px; border-radius: 20px; border: 0.5px solid var(--border2); color: var(--muted); }
+  .status-pill.connected { border-color: var(--green); color: var(--green); background: var(--green-dim); }
+  .status-pill.error { border-color: var(--red); color: var(--red); background: var(--red-dim); }
+  .status-pill.moving { border-color: var(--blue); color: var(--blue); background: var(--blue-dim); }
+  .layout { display: grid; grid-template-columns: 340px 1fr; gap: 16px; align-items: start; }
+  .panel { background: var(--surface); border: 0.5px solid var(--border); border-radius: 10px; padding: 16px; }
+  .panel-label { font-family: var(--mono); font-size: 10px; color: var(--muted); letter-spacing: 0.1em; text-transform: uppercase; margin-bottom: 14px; }
+  .slider-row { display: flex; align-items: center; gap: 8px; margin-bottom: 12px; }
+  .slider-label { font-family: var(--mono); font-size: 11px; color: var(--muted); min-width: 68px; }
+  input[type=range] { flex: 1; -webkit-appearance: none; height: 2px; background: var(--border2); border-radius: 2px; outline: none; min-width: 0; }
+  input[type=range]::-webkit-slider-thumb { -webkit-appearance: none; width: 14px; height: 14px; border-radius: 50%; background: var(--blue); cursor: pointer; }
+  input[type=number] { width: 62px; padding: 4px 6px; background: var(--surface2); border: 0.5px solid var(--border2); border-radius: 5px; color: var(--text); font-family: var(--mono); font-size: 11px; outline: none; -moz-appearance: textfield; }
+  input[type=number]::-webkit-inner-spin-button, input[type=number]::-webkit-outer-spin-button { -webkit-appearance: none; }
+  input[type=number]:focus { border-color: var(--blue); }
+  .metrics { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-bottom: 14px; }
+  .metric { background: var(--surface2); border: 0.5px solid var(--border); border-radius: 8px; padding: 10px 12px; }
+  .metric-label { font-family: var(--mono); font-size: 10px; color: var(--muted); margin-bottom: 4px; }
+  .metric-val { font-family: var(--mono); font-size: 20px; font-weight: 500; color: var(--text); }
+  .metric-val.pos { color: var(--blue); } .metric-val.neg { color: var(--orange); } .metric-val.zero { color: var(--muted); }
+  .wheel-bars { margin-bottom: 14px; }
+  .wheel-row { display: flex; align-items: center; gap: 10px; margin-bottom: 8px; }
+  .wheel-name { font-family: var(--mono); font-size: 11px; color: var(--muted); min-width: 36px; }
+  .wheel-name.active { color: var(--blue); }
+  .bar-track { flex: 1; height: 4px; background: var(--surface2); border-radius: 4px; overflow: hidden; }
+  .bar-fill { height: 100%; border-radius: 4px; transition: width 0.12s, background 0.12s; }
+  .wheel-num { font-family: var(--mono); font-size: 11px; color: var(--text); min-width: 44px; text-align: right; }
+  .btn-row { display: flex; gap: 8px; margin-top: 4px; }
+  button { flex: 1; padding: 9px 0; border-radius: 7px; border: 0.5px solid var(--border2); background: transparent; color: var(--text); font-family: var(--mono); font-size: 12px; cursor: pointer; transition: background 0.12s; }
+  button:hover { background: var(--surface2); }
+  button.btn-send { border-color: var(--blue); color: var(--blue); background: var(--blue-dim); }
+  button.btn-send:hover { background: rgba(77,158,247,0.25); }
+  button.btn-stop { border-color: var(--red); color: var(--red); background: var(--red-dim); }
+  button.btn-home { border-color: var(--green); color: var(--green); background: var(--green-dim); }
+  .code-block { background: var(--surface2); border: 0.5px solid var(--border); border-radius: 8px; padding: 12px 14px; font-family: var(--mono); font-size: 11px; color: var(--muted); line-height: 1.9; margin-top: 14px; white-space: pre; }
+  .code-block .kw { color: var(--blue); } .code-block .num { color: var(--orange); }
+  canvas { display: block; width: 100%; }
+  .right-col { display: flex; flex-direction: column; gap: 16px; }
+  .field-wrap { background: var(--surface); border: 0.5px solid var(--border); border-radius: 10px; padding: 16px; }
+  .canvas-row { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+  .coord-bar { display: flex; align-items: center; gap: 12px; margin-top: 10px; font-family: var(--mono); font-size: 11px; color: var(--muted); flex-wrap: wrap; }
+  .coord-bar span { color: var(--text); }
+  .log-panel { background: var(--surface); border: 0.5px solid var(--border); border-radius: 10px; padding: 16px; max-height: 140px; overflow-y: auto; }
+  .log-entry { font-family: var(--mono); font-size: 11px; line-height: 1.7; border-bottom: 0.5px solid var(--border); padding: 3px 0; }
+  .log-entry .ts { color: var(--muted); margin-right: 8px; }
+  .log-entry .msg { color: var(--text); }
+  .log-entry.err .msg { color: var(--red); }
+  .log-entry.ok .msg { color: var(--green); }
+</style>
+</head>
+<body>
+
+<header>
+  <h1>mecanum_fl_controller</h1>
+  <span class="status-pill" id="conn-pill">connecting...</span>
+  <span style="font-family:var(--mono);font-size:11px;color:var(--muted);margin-left:auto;">motor pos: <span id="pos-header">0.000</span> turns</span>
+</header>
+
+<div class="layout">
+  <div>
+    <div class="panel">
+      <div class="panel-label">vector input</div>
+      <div class="slider-row">
+        <span class="slider-label">magnitude</span>
+        <input type="range" id="mag" min="0" max="10" value="5" step="0.1" />
+        <input type="number" id="mag-n" min="0" max="10" value="5" step="0.1" />
+      </div>
+      <div class="slider-row">
+        <span class="slider-label">theta (°)</span>
+        <input type="range" id="theta" min="0" max="359" value="0" step="1" />
+        <input type="number" id="theta-n" min="0" max="359" value="0" step="1" />
+      </div>
+      <div class="slider-row">
+        <span class="slider-label">rotation</span>
+        <input type="range" id="rot" min="-360" max="360" value="0" step="1" />
+        <input type="number" id="rot-n" min="-360" max="360" value="0" step="1" />
+      </div>
+      <div class="slider-row">
+        <span class="slider-label">velocity %</span>
+        <input type="range" id="velPct" min="1" max="100" value="30" step="1" />
+        <input type="number" id="velPct-n" min="1" max="100" value="30" step="1" />
+      </div>
+
+      <div class="metrics">
+        <div class="metric"><div class="metric-label">FL speed</div><div class="metric-val" id="fl-speed-m">0.00</div></div>
+        <div class="metric"><div class="metric-label">FL direction</div><div class="metric-val" id="fl-dir-m" style="font-size:13px;">—</div></div>
+        <div class="metric"><div class="metric-label">vx</div><div class="metric-val" id="vx-m">0.00</div></div>
+        <div class="metric"><div class="metric-label">vy</div><div class="metric-val" id="vy-m">0.00</div></div>
+      </div>
+
+      <div class="panel-label">all wheels</div>
+      <div class="wheel-bars" id="wheel-bars"></div>
+
+      <div class="btn-row">
+        <button class="btn-send" id="btn-send">send to motor</button>
+        <button class="btn-home" id="btn-home">home</button>
+        <button class="btn-stop" id="btn-stop">e-stop</button>
+      </div>
+      <div class="code-block" id="code-out"></div>
+    </div>
+  </div>
+
+  <div class="right-col">
+    <div class="canvas-row">
+      <div class="field-wrap">
+        <div class="panel-label">world view — north fixed, robot rotates</div>
+        <canvas id="field" height="340"></canvas>
+        <div class="coord-bar">
+          x: <span id="coord-x">0.00</span>
+          y: <span id="coord-y">0.00</span>
+          hdg: <span id="coord-h">0°</span>
+          <button id="btn-reset-pos" style="flex:none;padding:3px 10px;font-size:10px;margin-left:auto;">reset</button>
+          <button id="btn-clear-trail" style="flex:none;padding:3px 10px;font-size:10px;">clear trail</button>
+        </div>
+      </div>
+      <div class="field-wrap">
+        <div class="panel-label">FL wheel — real motor</div>
+        <canvas id="wheel-c" height="340"></canvas>
+      </div>
+    </div>
+    <div class="log-panel" id="log">
+      <div class="log-entry"><span class="ts">--:--:--</span><span class="msg">waiting for connection...</span></div>
+    </div>
+  </div>
+</div>
+
+<script>
+const API = 'http://192.168.2.83:5000';
+const MAX_VEL = 10.0;
+const CELL = 44;
+
+let worldX = 0, worldY = 0, worldAngle = 0;
+let trail = [];
+let lastData = null;
+
+function syncPair(sliderId, numId, snapPoints) {
+  const s = document.getElementById(sliderId);
+  const n = document.getElementById(numId);
+
+  function snap(val) {
+    if (!snapPoints) return val;
+    // Find closest snap point and apply magnetic pull
+    let closest = null;
+    let closestDist = Infinity;
+    for (const sp of snapPoints) {
+      const dist = Math.abs(val - sp.val);
+      if (dist < sp.range) {
+        // Within magnetic range — calculate pull strength
+        const pull = 1 - (dist / sp.range);
+        const strength = pull * pull * sp.weight; // quadratic falloff
+        if (dist < closestDist * (1 - strength * 0.5)) {
+          closest = sp.val;
+          closestDist = dist;
+        }
+      }
+    }
+    if (closest !== null && closestDist < 3) return closest;
+    return val;
+  }
+
+  s.addEventListener('input', () => {
+    let val = parseFloat(s.value);
+    val = snap(val);
+    s.value = val;
+    n.value = s.step.includes('.') ? val.toFixed(1) : Math.round(val);
+    update();
+  });
+  n.addEventListener('input', () => {
+    let v = parseFloat(n.value);
+    if (isNaN(v)) return;
+    v = Math.max(parseFloat(s.min), Math.min(parseFloat(s.max), v));
+    s.value = v;
+    update();
+  });
+}
+
+// Snap configs: val = snap-to value, range = magnetic pull radius, weight = strength 0-1
+const THETA_SNAPS = [];
+for (let a = 0; a <= 359; a += 5) {
+  if (a % 45 === 0)      THETA_SNAPS.push({ val: a, range: 8, weight: 1.0 });   // 0,45,90... heaviest
+  else if (a % 10 === 0) THETA_SNAPS.push({ val: a, range: 5, weight: 0.6 });   // 10,20,30...
+  else                   THETA_SNAPS.push({ val: a, range: 3, weight: 0.3 });   // 5,15,25...
+}
+
+const ROT_SNAPS = [];
+for (let a = -360; a <= 360; a += 5) {
+  if (a % 90 === 0)      ROT_SNAPS.push({ val: a, range: 12, weight: 1.0 });
+  else if (a % 45 === 0) ROT_SNAPS.push({ val: a, range: 8, weight: 0.7 });
+  else if (a % 10 === 0) ROT_SNAPS.push({ val: a, range: 5, weight: 0.5 });
+  else                   ROT_SNAPS.push({ val: a, range: 3, weight: 0.3 });
+}
+
+const MAG_SNAPS = [];
+for (let m = 0; m <= 10; m += 1) {
+  MAG_SNAPS.push({ val: m, range: 0.3, weight: 0.8 });
+}
+for (let m = 0.5; m <= 9.5; m += 1) {
+  MAG_SNAPS.push({ val: m, range: 0.15, weight: 0.4 });
+}
+
+const VEL_SNAPS = [];
+for (let v = 0; v <= 100; v += 5) {
+  if (v % 25 === 0)     VEL_SNAPS.push({ val: v, range: 4, weight: 1.0 });
+  else if (v % 10 === 0) VEL_SNAPS.push({ val: v, range: 3, weight: 0.6 });
+  else                   VEL_SNAPS.push({ val: v, range: 2, weight: 0.3 });
+}
+
+syncPair('mag', 'mag-n', MAG_SNAPS);
+syncPair('theta', 'theta-n', THETA_SNAPS);
+syncPair('rot', 'rot-n', ROT_SNAPS);
+syncPair('velPct', 'velPct-n', VEL_SNAPS);
+
+function compute() {
+  const r     = parseFloat(document.getElementById('mag').value);
+  const tDeg  = parseFloat(document.getElementById('theta').value);
+  const omegaDeg = parseFloat(document.getElementById('rot').value);
+  const vp    = parseFloat(document.getElementById('velPct').value);
+  const t = (tDeg + 90) * Math.PI / 180;
+  const vx = r * Math.cos(t);
+  const vy = r * Math.sin(t);
+  const omega = omegaDeg / 72; // scale -360..360 → -5..5 for wheel math
+  const fl = vx - vy - omega;
+  const fr = vx + vy + omega;
+  const bl = vx + vy - omega;
+  const br = vx - vy + omega;
+  return { r, tDeg, t, omega: omegaDeg, omegaWheel: omega, fl, fr, bl, br, vp, velLimit: (vp/100)*MAX_VEL };
+}
+
+function barColor(v) { return v > 0.01 ? '#4d9ef7' : v < -0.01 ? '#f07d3a' : '#2a2a2e'; }
+function valClass(v) { return v > 0.01 ? 'pos' : v < -0.01 ? 'neg' : 'zero'; }
+
+function update() {
+  const d = compute();
+  lastData = d;
+  document.getElementById('vx-m').textContent = d.vx.toFixed(2);
+  document.getElementById('vy-m').textContent = d.vy.toFixed(2);
+  const flEl = document.getElementById('fl-speed-m');
+  flEl.textContent = Math.abs(d.fl).toFixed(2);
+  flEl.className = 'metric-val ' + valClass(d.fl);
+  const flDir = document.getElementById('fl-dir-m');
+  flDir.textContent = d.fl > 0.01 ? 'forward' : d.fl < -0.01 ? 'reverse' : 'stop';
+  flDir.style.color = d.fl > 0.01 ? 'var(--blue)' : d.fl < -0.01 ? 'var(--orange)' : 'var(--muted)';
+  const wheels = [
+    { name: 'FL', val: d.fl, active: true },
+    { name: 'FR', val: d.fr }, { name: 'BL', val: d.bl }, { name: 'BR', val: d.br },
+  ];
+  const maxA = Math.max(...wheels.map(w => Math.abs(w.val)), 0.01);
+  document.getElementById('wheel-bars').innerHTML = wheels.map(w => {
+    const pct = (Math.abs(w.val) / maxA * 100).toFixed(1);
+    return `<div class="wheel-row">
+      <span class="wheel-name${w.active?' active':''}">${w.name}</span>
+      <div class="bar-track"><div class="bar-fill" style="width:${pct}%;background:${barColor(w.val)};"></div></div>
+      <span class="wheel-num">${w.val.toFixed(2)}</span>
+    </div>`;
+  }).join('');
+  document.getElementById('code-out').innerHTML =
+    `<span class="kw">odrv</span>.axis0.controller.config.vel_limit = <span class="num">${d.velLimit.toFixed(2)}</span>\n<span class="kw">move_by</span>(<span class="num">${d.fl.toFixed(3)}</span>, <span class="num">${d.vp}</span>)`;
+}
+
+let motion = null;
+
+function startMotion(d) {
+  const velFrac = d.vp / 100;
+  const hasTranslation = d.r > 0.01;
+  const hasRotation = Math.abs(d.omega) > 0.01;
+  if (!hasTranslation && !hasRotation) return;
+
+  trail.push({ x: worldX, y: worldY });
+
+  // Translation: absolute world axes (theta is world angle, not robot-relative)
+  const worldTheta = d.t;
+  const totalDist = d.r;
+  const targetX = worldX + Math.cos(worldTheta) * totalDist;
+  const targetY = worldY + Math.sin(worldTheta) * totalDist;
+
+  // Rotation: omega is now degrees, convert to radians directly
+  const totalRot = d.omega * (Math.PI / 180);
+
+  // Animation speed: proportional to vel%, roughly 1 unit/s at 100%
+  const animSpeed = Math.max(velFrac, 0.05);
+
+  motion = {
+    startX: worldX, startY: worldY, startAngle: worldAngle,
+    targetX, targetY, totalDist, totalRot,
+    frac: 0, animSpeed
+  };
+}
+
+function simStep() {
+  if (!motion) return;
+  const dt = 0.05;
+  const step = motion.animSpeed * dt * 1.2;
+  motion.frac = Math.min(motion.frac + step, 1);
+  const f = motion.frac;
+
+  worldX     = motion.startX + (motion.targetX - motion.startX) * f;
+  worldY     = motion.startY + (motion.targetY - motion.startY) * f;
+  worldAngle = motion.startAngle + motion.totalRot * f;
+
+  trail.push({ x: worldX, y: worldY });
+  if (trail.length > 1000) trail.shift();
+  if (motion.frac >= 1) motion = null;
+
+  const deg = (((worldAngle * 180 / Math.PI) % 360) + 360) % 360;
+  document.getElementById('coord-x').textContent = worldX.toFixed(2);
+  document.getElementById('coord-y').textContent = worldY.toFixed(2);
+  document.getElementById('coord-h').textContent = deg.toFixed(1) + '°';
+}
+
+function w2s(wx, wy, cx, cy) {
+  return { sx: cx + (wx - worldX) * CELL, sy: cy - (wy - worldY) * CELL };
+}
+
+function drawField(d) {
+  const c = document.getElementById('field');
+  const W = c.offsetWidth || 300;
+  c.width = W;
+  const H = c.height;
+  const ctx = c.getContext('2d');
+  ctx.clearRect(0, 0, W, H);
+  const cx = W / 2, cy = H / 2;
+
+  const offX = ((worldX % 1) * CELL + CELL) % CELL;
+  const offY = ((worldY % 1) * CELL + CELL) % CELL;
+  ctx.strokeStyle = 'rgba(255,255,255,0.05)';
+  ctx.lineWidth = 0.5;
+  for (let x = -offX; x < W + CELL; x += CELL) {
+    ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, H); ctx.stroke();
+  }
+  for (let y = offY; y < H + CELL; y += CELL) {
+    ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(W, y); ctx.stroke();
+  }
+
+  ctx.fillStyle = 'rgba(255,255,255,0.1)';
+  ctx.font = '9px IBM Plex Mono, monospace';
+  for (let dx = -4; dx <= 4; dx++) {
+    for (let dy = -4; dy <= 4; dy++) {
+      const gx = Math.round(worldX) + dx;
+      const gy = Math.round(worldY) + dy;
+      if (gx % 5 !== 0 || gy % 5 !== 0) continue;
+      const { sx, sy } = w2s(gx, gy, cx, cy);
+      if (sx < -10 || sx > W + 10 || sy < -10 || sy > H + 10) continue;
+      ctx.fillText(`${gx},${gy}`, sx + 2, sy - 2);
+    }
+  }
+
+  if (trail.length > 1) {
+    for (let i = 1; i < trail.length; i++) {
+      const { sx: x0, sy: y0 } = w2s(trail[i-1].x, trail[i-1].y, cx, cy);
+      const { sx: x1, sy: y1 } = w2s(trail[i].x, trail[i].y, cx, cy);
+      const alpha = (i / trail.length) * 0.75 + 0.05;
+      ctx.strokeStyle = `rgba(77,158,247,${alpha})`;
+      ctx.lineWidth = 1.5;
+      ctx.beginPath(); ctx.moveTo(x0, y0); ctx.lineTo(x1, y1); ctx.stroke();
+    }
+    const last = trail[trail.length - 1];
+    const { sx: lx, sy: ly } = w2s(last.x, last.y, cx, cy);
+    ctx.strokeStyle = 'rgba(77,158,247,0.6)';
+    ctx.lineWidth = 1.5;
+    ctx.beginPath(); ctx.moveTo(lx, ly); ctx.lineTo(cx, cy); ctx.stroke();
+  }
+
+  if (d.r > 0.1) {
+    const vScale = (Math.min(cx, cy) - 28) / 10;
+    const ex = cx + Math.cos(d.t) * d.r * vScale;
+    const ey = cy - Math.sin(d.t) * d.r * vScale;
+    ctx.strokeStyle = '#3ecf7a';
+    ctx.lineWidth = 2;
+    ctx.beginPath(); ctx.moveTo(cx, cy); ctx.lineTo(ex, ey); ctx.stroke();
+    const ang = Math.atan2(ey - cy, ex - cx);
+    ctx.fillStyle = '#3ecf7a';
+    ctx.beginPath();
+    ctx.moveTo(ex, ey);
+    ctx.lineTo(ex - 10*Math.cos(ang-0.4), ey - 10*Math.sin(ang-0.4));
+    ctx.lineTo(ex - 10*Math.cos(ang+0.4), ey - 10*Math.sin(ang+0.4));
+    ctx.closePath(); ctx.fill();
+  }
+
+  ctx.save();
+  ctx.translate(cx, cy);
+  ctx.rotate(worldAngle);
+  const rW = 24, rH = 36;
+  ctx.fillStyle = '#1e1e21';
+  ctx.strokeStyle = 'rgba(255,255,255,0.2)';
+  ctx.lineWidth = 1;
+  ctx.fillRect(-rW/2, -rH/2, rW, rH);
+  ctx.strokeRect(-rW/2, -rH/2, rW, rH);
+  ctx.fillStyle = 'rgba(255,255,255,0.6)';
+  ctx.font = '11px sans-serif';
+  ctx.textAlign = 'center';
+  ctx.fillText('▲', 0, -rH/2 - 5);
+
+  const wPos = [
+    { x: -rW/2-6, y: -rH/2+2,  v: d.fl, real: true },
+    { x:  rW/2-2, y: -rH/2+2,  v: d.fr },
+    { x: -rW/2-6, y:  rH/2-10, v: d.bl },
+    { x:  rW/2-2, y:  rH/2-10, v: d.br },
+  ];
+  const maxA = Math.max(...wPos.map(w => Math.abs(w.v)), 0.01);
+  wPos.forEach(wp => {
+    const alpha = Math.min(Math.abs(wp.v)/maxA, 1);
+    ctx.fillStyle = wp.v > 0 ? `rgba(77,158,247,${0.3+alpha*0.7})` :
+                    wp.v < 0 ? `rgba(240,125,58,${0.3+alpha*0.7})` : '#2a2a2e';
+    ctx.fillRect(wp.x, wp.y, 8, 8);
+    if (wp.real) {
+      ctx.strokeStyle = '#4d9ef7'; ctx.lineWidth = 1.5;
+      ctx.strokeRect(wp.x-1, wp.y-1, 10, 10);
+    }
+  });
+  ctx.restore();
+
+  if (Math.abs(d.omega) > 0.5) {
+    const totalRot = d.omega * (Math.PI / 180);
+    const done = motion ? motion.frac : (d.omega !== 0 ? 0 : 1);
+    const remaining = Math.abs(totalRot) * (1 - done);
+    const alpha = 0.55 * (1 - done);
+    if (remaining > 0.01 && alpha > 0.01) {
+      ctx.strokeStyle = `rgba(240,125,58,${alpha})`;
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      const startAng = -Math.PI/2 + worldAngle;
+      const endAng = startAng + (d.omega > 0 ? remaining : -remaining);
+      ctx.arc(cx, cy, 30, startAng, endAng, d.omega < 0);
+      ctx.stroke();
+      const arrowAng = endAng + (d.omega > 0 ? -0.2 : 0.2);
+      ctx.fillStyle = `rgba(240,125,58,${alpha})`;
+      ctx.beginPath();
+      ctx.moveTo(cx + Math.cos(endAng)*30, cy + Math.sin(endAng)*30);
+      ctx.lineTo(cx + Math.cos(arrowAng)*24, cy + Math.sin(arrowAng)*24);
+      ctx.lineTo(cx + Math.cos(arrowAng)*36, cy + Math.sin(arrowAng)*36);
+      ctx.closePath();
+      ctx.fill();
+    }
+  }
+
+  ctx.fillStyle = 'rgba(255,255,255,0.25)';
+  ctx.font = '10px IBM Plex Mono, monospace';
+  ctx.textAlign = 'center';
+  ctx.fillText('N', cx, 13);
+  ctx.fillText('S', cx, H - 4);
+  ctx.textAlign = 'left';
+  ctx.fillText('W', 4, cy + 4);
+  ctx.fillText('E', W - 14, cy + 4);
+}
+
+function drawWheel() {
+  const c = document.getElementById('wheel-c');
+  const W = c.offsetWidth || 260;
+  c.width = W;
+  const H = c.height;
+  const ctx = c.getContext('2d');
+  ctx.clearRect(0, 0, W, H);
+  const d = lastData || compute();
+  const cx = W/2, cy = H/2 - 10;
+  const rx = W*0.36, ry = H*0.2;
+
+  ctx.strokeStyle = 'rgba(255,255,255,0.12)';
+  ctx.lineWidth = 2;
+  ctx.beginPath();
+  ctx.ellipse(cx, cy, rx, ry, 0, 0, Math.PI*2);
+  ctx.stroke();
+
+  const now = Date.now() / 1000;
+  const speed = d.fl;
+  for (let i = 0; i < 10; i++) {
+    const a = (i/10)*Math.PI*2 + now*speed*0.6;
+    const px = cx + Math.cos(a)*rx, py = cy + Math.sin(a)*ry;
+    const rLen = 18, rAng = Math.PI/4;
+    const alpha = Math.min(Math.abs(speed)/5 + 0.3, 1);
+    ctx.strokeStyle = speed > 0.01 ? `rgba(77,158,247,${alpha})` :
+                      speed < -0.01 ? `rgba(240,125,58,${alpha})` : 'rgba(107,107,104,0.4)';
+    ctx.lineWidth = 3; ctx.lineCap = 'round';
+    ctx.beginPath();
+    ctx.moveTo(px - Math.cos(rAng)*rLen/2, py - Math.sin(rAng)*rLen/2);
+    ctx.lineTo(px + Math.cos(rAng)*rLen/2, py + Math.sin(rAng)*rLen/2);
+    ctx.stroke();
+  }
+
+  ctx.fillStyle = 'rgba(255,255,255,0.45)';
+  ctx.font = '500 11px IBM Plex Mono, monospace';
+  ctx.textAlign = 'center';
+  ctx.fillText('front-left  |  real motor', cx, H - 8);
+  if (Math.abs(speed) > 0.05) {
+    const dir = speed > 0 ? 1 : -1;
+    ctx.fillStyle = speed > 0 ? '#4d9ef7' : '#f07d3a';
+    ctx.fillText(dir > 0 ? '→ fwd' : '← rev', cx + dir*(rx+30), cy+5);
+  }
+  ctx.textAlign = 'left';
+  requestAnimationFrame(drawWheel);
+}
+
+function log(msg, type='') {
+  const el = document.getElementById('log');
+  const ts = new Date().toTimeString().slice(0,8);
+  const div = document.createElement('div');
+  div.className = 'log-entry ' + type;
+  div.innerHTML = `<span class="ts">${ts}</span><span class="msg">${msg}</span>`;
+  el.prepend(div);
+  while (el.children.length > 40) el.removeChild(el.lastChild);
+}
+
+async function sendCommand() {
+  const d = compute();
+  log(`r=${d.r.toFixed(2)} θ=${d.tDeg}° rot=${d.omega.toFixed(0)}° vel=${d.vp}%`);
+  startMotion(d);
+  try {
+    const res = await fetch(`${API}/move_polar`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ r: d.r, theta: d.tDeg, omega: d.omega, vel_pct: d.vp })
+    });
+    const data = await res.json();
+    if (data.ok) log(`FL=${data.fl} turns @ ${data.vel_limit} t/s`, 'ok');
+    else log(data.error || 'error', 'err');
+  } catch(e) {
+    log('server unreachable — is server.py running?', 'err');
+  }
+}
+
+async function eStop() {
+  log('E-STOP', 'err');
+  try { await fetch(`${API}/estop`, { method: 'POST' }); } catch(e) {}
+}
+
+async function goHome() {
+  log('going home...', '');
+  try { await fetch(`${API}/home`, { method: 'POST' }); } catch(e) {}
+}
+
+async function pollStatus() {
+  try {
+    const res = await fetch(`${API}/status`);
+    const data = await res.json();
+    const pill = document.getElementById('conn-pill');
+    if (data.moving) { pill.className='status-pill moving'; pill.textContent='moving'; }
+    else if (data.connected) { pill.className='status-pill connected'; pill.textContent='connected'; }
+    else { pill.className='status-pill error'; pill.textContent='odrive not found'; }
+    document.getElementById('pos-header').textContent = data.position.toFixed(3);
+  } catch(e) {
+    const pill = document.getElementById('conn-pill');
+    pill.className='status-pill error'; pill.textContent='server offline';
+  }
+}
+
+document.getElementById('btn-send').addEventListener('click', sendCommand);
+document.getElementById('btn-stop').addEventListener('click', eStop);
+document.getElementById('btn-home').addEventListener('click', goHome);
+document.getElementById('btn-reset-pos').addEventListener('click', () => {
+  worldX=0; worldY=0; worldAngle=0; trail=[];
+  document.getElementById('coord-x').textContent='0.00';
+  document.getElementById('coord-y').textContent='0.00';
+  document.getElementById('coord-h').textContent='0°';
+});
+document.getElementById('btn-clear-trail').addEventListener('click', () => { trail=[]; });
+
+setInterval(() => {
+  simStep();
+  drawField(compute());
+}, 50);
+
+update();
+drawWheel();
+setInterval(pollStatus, 1000);
+pollStatus();
+</script>
+</body>
+</html>

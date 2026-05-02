@@ -138,70 +138,91 @@ def mecanum_speeds(vx, vy, omega):
 
 moving = False
 
-RAMP_TIME = 0.3
-RAMP_STEPS = 10
-ROT_RATE = 90.0           # degrees per second of robot rotation
-ROT_WHEEL_SPEED = 6.0     # wheel turns/s during rotation — tune until 180deg is accurate
+TURNS_PER_DEG = 0.067     # wheel turns per degree of robot rotation — tune this
+POS_TOLERANCE = 0.1       # turns — how close to target before "done"
+MOVE_TIMEOUT = 30         # seconds — safety timeout
+TRANS_VEL = 3.0           # default translation wheel speed (turns/s)
+ROT_VEL = 3.0             # default rotation wheel speed (turns/s)
 
-def _command_all(trans_speeds, trans_scale, rot_speeds, rot_scale):
-    """Command each motor with translation + rotation velocities summed."""
-    for nid in ALL_IDS:
-        if nid not in connected:
-            continue
-        v = trans_speeds.get(nid, 0) * trans_scale + rot_speeds.get(nid, 0) * rot_scale
-        actual = v * MOTORS[nid]["dir"]
-        send_can(nid, CMD_SET_INPUT_VEL, struct.pack('<ff', actual, 0.0))
+def _command_vel(nid, velocity):
+    """Command a single motor velocity (with direction flip)."""
+    if nid not in connected:
+        return
+    actual = velocity * MOTORS[nid]["dir"]
+    send_can(nid, CMD_SET_INPUT_VEL, struct.pack('<ff', actual, 0.0))
 
-def _run_move(trans_speeds, trans_vel, rot_speeds, rot_vel, trans_dur, rot_dur):
+def _run_move(targets, vel_pct):
+    """
+    targets: {nid: total_turns_to_move} (signed, direction-independent — dir flip in _command_vel)
+    vel_pct: speed as percentage of MAX_VEL
+    """
     global moving
-    total_dur = max(trans_dur, rot_dur)
-    if total_dur <= 0:
+    if not targets:
         moving = False
         return
 
-    # Arm all motors
-    for nid in ALL_IDS:
+    vel_scale = (vel_pct / 100.0) * MAX_VEL
+
+    # Arm all
+    for nid in targets:
         if nid in connected:
             arm(nid)
 
-    # Ramp up
-    step_dt = RAMP_TIME / RAMP_STEPS
-    for i in range(1, RAMP_STEPS + 1):
-        frac = i / RAMP_STEPS
-        t_s = trans_vel * frac if trans_dur > 0 else 0
-        r_s = rot_vel * frac if rot_dur > 0 else 0
-        _command_all(trans_speeds, t_s, rot_speeds, r_s)
-        time.sleep(step_dt)
+    # Record start positions
+    start_pos = {nid: positions.get(nid, 0.0) for nid in targets}
+    goal_pos = {nid: start_pos[nid] + targets[nid] * MOTORS[nid]["dir"] for nid in targets}
 
-    # Main loop: update at 20Hz, drop each component when its time is up
-    elapsed = RAMP_TIME
+    # Compute velocity direction per wheel
+    vel_dir = {}
+    for nid in targets:
+        if abs(targets[nid]) < 0.001:
+            vel_dir[nid] = 0.0
+        else:
+            vel_dir[nid] = vel_scale if targets[nid] > 0 else -vel_scale
+
+    # Command initial velocities
+    for nid in targets:
+        if nid in connected:
+            _command_vel(nid, vel_dir[nid])
+
+    # Monitor encoder positions
+    done = {nid: False for nid in targets}
+    start_time = time.time()
     tick = 0
-    while elapsed < total_dur - RAMP_TIME:
-        dt = 0.05
-        time.sleep(dt)
-        elapsed += dt
 
-        t_on = elapsed < trans_dur - RAMP_TIME if trans_dur > 0 else False
-        r_on = elapsed < rot_dur - RAMP_TIME if rot_dur > 0 else False
-
-        t_s = trans_vel if t_on else 0
-        r_s = rot_vel if r_on else 0
-        _command_all(trans_speeds, t_s, rot_speeds, r_s)
-
+    while not all(done.values()):
+        time.sleep(0.05)
         tick += 1
-        if tick % 20 == 0:  # print current every ~1s
-            cur_str = "  ".join(f"{nid}({MOTORS[nid]['role']}):{currents[nid]:+.3f}A" for nid in sorted(ALL_IDS))
-            print(f"  [{elapsed:.1f}/{total_dur:.1f}s] {cur_str}")
 
-    # Ramp down whatever is still active
-    for i in range(RAMP_STEPS - 1, -1, -1):
-        frac = i / RAMP_STEPS
-        t_s = trans_vel * frac if elapsed < trans_dur else 0
-        r_s = rot_vel * frac if elapsed < rot_dur else 0
-        _command_all(trans_speeds, t_s, rot_speeds, r_s)
-        time.sleep(step_dt)
+        for nid in targets:
+            if done[nid]:
+                continue
+            current = positions.get(nid, 0.0)
+            remaining = goal_pos[nid] - current
+            if abs(remaining) < POS_TOLERANCE:
+                # Reached target — stop this wheel
+                _command_vel(nid, 0.0)
+                done[nid] = True
+                print(f"  node {nid} ({MOTORS[nid]['role']}): reached target ({current:.3f})")
+            elif abs(remaining) < 1.0:
+                # Close — slow down proportionally
+                slow_vel = vel_dir[nid] * (abs(remaining) / 1.0)
+                slow_vel = max(abs(slow_vel), 0.5) * (1 if slow_vel >= 0 else -1)
+                _command_vel(nid, slow_vel)
 
-    for nid in ALL_IDS:
+        if tick % 20 == 0:
+            cur_str = "  ".join(
+                f"{nid}({MOTORS[nid]['role']}):{positions.get(nid,0):+.3f}/{goal_pos[nid]:+.3f}"
+                for nid in sorted(targets.keys())
+            )
+            print(f"  {cur_str}")
+
+        if time.time() - start_time > MOVE_TIMEOUT:
+            print("  TIMEOUT — stopping all")
+            break
+
+    # Stop all
+    for nid in targets:
         if nid in connected:
             stop(nid)
     moving = False
@@ -219,48 +240,40 @@ def get_status():
 def move_polar():
     global moving
     data = request.json
-    magnitude = float(data.get("r", 0))        # distance in turns
+    magnitude = float(data.get("r", 0))        # distance in wheel turns
     theta_deg = float(data.get("theta", 0))     # direction (0=forward, CW)
     omega_deg = float(data.get("omega", 0))     # total rotation in degrees
-    vel_pct   = float(data.get("vel_pct", 30))  # translation speed %
+    vel_pct   = float(data.get("vel_pct", 30))  # speed %
 
     if magnitude <= 0 and abs(omega_deg) < 0.1:
         return jsonify({"ok": False, "error": "need magnitude or rotation"})
 
-    # --- Translation ---
-    trans_vel = (vel_pct / 100.0) * MAX_VEL     # turns/s
-    trans_dur = magnitude / trans_vel if magnitude > 0 and trans_vel > 0 else 0
-
+    # --- Translation targets (turns per wheel) ---
     theta = math.radians(-theta_deg)
     vx = math.cos(theta)
     vy = math.sin(theta)
-    trans_speeds = mecanum_speeds(vx, vy, 0)    # pure translation, no rotation
+    trans_unit = mecanum_speeds(vx, vy, 0)
+    trans_targets = {nid: trans_unit[nid] * magnitude for nid in ALL_IDS}
 
-    # --- Rotation ---
-    rot_dur = abs(omega_deg) / ROT_RATE if abs(omega_deg) > 0.1 else 0
+    # --- Rotation targets (turns per wheel) ---
+    rot_turns = abs(omega_deg) * TURNS_PER_DEG
     rot_sign = 1.0 if omega_deg >= 0 else -1.0
-    rot_speeds = mecanum_speeds(0, 0, rot_sign) # pure rotation, unit speeds ±1
-    rot_vel = ROT_WHEEL_SPEED                   # direct wheel speed for rotation
+    rot_unit = mecanum_speeds(0, 0, rot_sign)
+    rot_targets = {nid: rot_unit[nid] * rot_turns for nid in ALL_IDS}
 
-    total_dur = max(trans_dur, rot_dur)
+    # --- Combined: each wheel's total turns to move ---
+    targets = {nid: trans_targets[nid] + rot_targets[nid] for nid in ALL_IDS}
 
-    print(f"\nCommand: mag={magnitude:.2f} theta={theta_deg:.1f} rot={omega_deg:.0f}deg")
-    print(f"  Translation: {trans_vel:.2f} t/s for {trans_dur:.2f}s")
-    print(f"  Rotation:    {rot_vel:.2f} t/s for {rot_dur:.2f}s")
-    print(f"  Total:       {total_dur:.2f}s")
+    print(f"\nCommand: mag={magnitude:.2f} theta={theta_deg:.1f} rot={omega_deg:.0f}deg vel={vel_pct}%")
+    for nid in sorted(ALL_IDS):
+        print(f"  node {nid} ({MOTORS[nid]['role']}): trans={trans_targets[nid]:+.2f} rot={rot_targets[nid]:+.2f} total={targets[nid]:+.2f} turns")
 
     moving = True
-    threading.Thread(
-        target=_run_move,
-        args=(trans_speeds, trans_vel, rot_speeds, rot_vel, trans_dur, rot_dur),
-        daemon=True
-    ).start()
+    threading.Thread(target=_run_move, args=(targets, vel_pct), daemon=True).start()
 
     return jsonify({
         "ok": True,
-        "trans_dur": round(trans_dur, 3),
-        "rot_dur": round(rot_dur, 3),
-        "total_dur": round(total_dur, 3),
+        "targets": {nid: round(targets[nid], 3) for nid in ALL_IDS},
     })
 
 @app.route("/stop", methods=["POST"])

@@ -20,7 +20,9 @@ centered in the camera frame.
 """
 
 import argparse
+import atexit
 import platform
+import signal
 import time
 
 import cv2
@@ -35,7 +37,7 @@ HSV_TOL_S = 50
 HSV_TOL_V = 50
 
 # Tracking and safety.
-DEADZONE = 0.10       # center 10% of frame means stop
+DEADZONE = 0.6       # center 10% of frame means stop
 MAX_STRAFE = 3.0     # turns/s at full camera offset
 MIN_BLOB = 500       # minimum matching contour area in pixels
 CONTROL_HZ = 20
@@ -208,6 +210,28 @@ def main():
     global picked_hsv, picked_rgb, tracking, click_pos
 
     args = parse_args()
+    state = {"mc": None, "cap": None, "driving": False, "cleaned": False}
+
+    def cleanup():
+        if state["cleaned"]:
+            return
+        state["cleaned"] = True
+        if state["driving"] and state["mc"]:
+            stop_drive(state["mc"], args.dry_run)
+        if state["cap"]:
+            state["cap"].release()
+        if not args.no_gui:
+            cv2.destroyAllWindows()
+        if state["mc"]:
+            state["mc"].shutdown()
+
+    def handle_signal(signum, frame):
+        cleanup()
+        raise KeyboardInterrupt
+
+    atexit.register(cleanup)
+    signal.signal(signal.SIGINT, handle_signal)
+    signal.signal(signal.SIGTERM, handle_signal)
     hardcoded_rgb = None
     if args.use_default_target:
         hardcoded_rgb = DEFAULT_TARGET_RGB
@@ -234,6 +258,7 @@ def main():
     if not cap.isOpened():
         print(f"Cannot open camera index {args.camera}")
         return
+    state["cap"] = cap
 
     if not args.no_gui:
         try:
@@ -246,6 +271,7 @@ def main():
     mc = None
     if not args.dry_run:
         mc = MecanumCAN(current_limit=30.0)
+        state["mc"] = mc
         mc.connect()
         if mc.bus is None:
             cap.release()
@@ -320,12 +346,14 @@ def main():
                             else:
                                 mc.drive(0.0, vy, speed, 0.0)
                             driving = True
+                            state["driving"] = True
                             command_text = f"err={error:+.2f} speed={speed:.2f} area={area:.0f}"
                         last_control = now
                 else:
                     if driving:
                         stop_drive(mc, args.dry_run)
                         driving = False
+                        state["driving"] = False
                     command_text = "OBJECT NOT SEEN"
                     cv2.putText(frame, command_text, (10, 70), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 255), 2)
             else:
@@ -348,24 +376,21 @@ def main():
                     if driving:
                         stop_drive(mc, args.dry_run)
                         driving = False
+                        state["driving"] = False
                     print("Re-pick target color.")
                 elif key == ord("s"):
                     tracking = False
                     if driving:
                         stop_drive(mc, args.dry_run)
                         driving = False
+                        state["driving"] = False
                     print("Stopped tracking.")
 
     except KeyboardInterrupt:
         print("\nInterrupted.")
     finally:
-        if driving:
-            stop_drive(mc, args.dry_run)
-        cap.release()
-        if not args.no_gui:
-            cv2.destroyAllWindows()
-        if mc:
-            mc.shutdown()
+        state["driving"] = driving
+        cleanup()
         print("Done.")
 
 

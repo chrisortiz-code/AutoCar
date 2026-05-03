@@ -52,6 +52,8 @@ class MecanumCAN:
         self.currents = {nid: 0.0 for nid in ALL_IDS}
         self.max_vel = max_vel
         self.current_limit = current_limit
+        self._closed = True
+        self._listener_thread = None
 
     # ── CAN low-level ───────────────────────────────────────────────
     def send(self, node_id, cmd_id, data=b''):
@@ -71,7 +73,7 @@ class MecanumCAN:
                 time.sleep(0.05)
 
     def _listener(self):
-        while self.bus:
+        while not self._closed and self.bus:
             try:
                 msg = self.bus.recv(timeout=1)
                 if msg is None:
@@ -92,6 +94,7 @@ class MecanumCAN:
     # ── Connection ──────────────────────────────────────────────────
     def connect(self):
         try:
+            self._closed = False
             self.bus = can.Bus(interface='gs_usb', channel=0, bitrate=1000000)
             print("CAN bus connected!")
             for attempt in range(5):
@@ -110,19 +113,44 @@ class MecanumCAN:
             print(f"Connected: {sorted(self.connected)}")
             if not self.connected:
                 print("WARNING: No ODrives found.")
-            threading.Thread(target=self._listener, daemon=True).start()
+            self._listener_thread = threading.Thread(target=self._listener, daemon=True)
+            self._listener_thread.start()
+        except KeyboardInterrupt:
+            self.shutdown()
+            raise
         except Exception as e:
             print(f"CAN connection failed: {e}")
+            self._closed = True
+            if self.bus:
+                try:
+                    self.bus.shutdown()
+                except:
+                    pass
             self.bus = None
 
     def shutdown(self):
+        bus = self.bus
+        if bus is None:
+            self._closed = True
+            return
+
         print("Shutting down motors...")
-        self.stop_all()
-        if self.bus:
-            try:
-                self.bus.shutdown()
-            except:
-                pass
+        try:
+            self.stop_all()
+        except Exception as e:
+            print(f"Motor shutdown warning: {e}")
+
+        self._closed = True
+        self.bus = None
+        try:
+            bus.shutdown()
+        except Exception as e:
+            print(f"CAN shutdown warning: {e}")
+
+        if self._listener_thread and self._listener_thread.is_alive():
+            self._listener_thread.join(timeout=1.5)
+        self._listener_thread = None
+        self.armed.clear()
         print("Done.")
 
     # ── Motor control ───────────────────────────────────────────────

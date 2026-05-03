@@ -54,6 +54,8 @@ def parse_args():
     parser.add_argument("--max-strafe", type=float, default=MAX_STRAFE, help="Max strafe speed in turns/s")
     parser.add_argument("--deadzone", type=float, default=DEADZONE, help="Centered deadzone as fraction of frame width")
     parser.add_argument("--min-blob", type=float, default=MIN_BLOB, help="Minimum contour area to accept target")
+    parser.add_argument("--scan-attempts", type=int, default=2, help="ODrive scan attempts before starting camera loop")
+    parser.add_argument("--scan-seconds", type=float, default=2.0, help="Seconds per ODrive scan attempt")
     parser.add_argument("--dry-run", action="store_true", help="Show camera and print commands without using CAN")
     return parser.parse_args()
 
@@ -197,12 +199,22 @@ def main():
 
     mc = None
     if not args.dry_run:
-        mc = MecanumCAN(current_limit=30.0)
+        mc = MecanumCAN(
+            current_limit=30.0,
+            scan_attempts=args.scan_attempts,
+            scan_seconds=args.scan_seconds,
+        )
         mc.connect()
         if mc.bus is None:
             cap.release()
             cv2.destroyAllWindows()
             print("CAN is unavailable. Exiting before enabling camera control.")
+            return
+        if not mc.connected:
+            cap.release()
+            cv2.destroyAllWindows()
+            mc.shutdown()
+            print("No ODrives found. Exiting before enabling camera control.")
             return
         mc.arm_all()
 
@@ -254,7 +266,7 @@ def main():
                                 driving = False
                             command_text = f"centered err={error:+.2f} area={area:.0f}"
                         else:
-                            vy = 1.0 if error > 0 else -1.0
+                            vy = -1.0 if error > 0 else 1.0
                             speed = (abs(error) - args.deadzone) / (1.0 - args.deadzone) * args.max_strafe
                             if args.dry_run:
                                 print(f"DRIVE vx=0.00 vy={vy:+.2f} trans_speed={speed:.2f} rot=0.00")

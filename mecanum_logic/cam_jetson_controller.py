@@ -40,6 +40,7 @@ MAX_STRAFE = 3.0     # turns/s at full camera offset
 MIN_BLOB = 500       # minimum matching contour area in pixels
 CONTROL_HZ = 20
 SAMPLE_SIZE = 5
+DEFAULT_TARGET_RGB = (36, 89, 133)
 
 
 picked_hsv = None
@@ -54,8 +55,36 @@ def parse_args():
     parser.add_argument("--max-strafe", type=float, default=MAX_STRAFE, help="Max strafe speed in turns/s")
     parser.add_argument("--deadzone", type=float, default=DEADZONE, help="Centered deadzone as fraction of frame width")
     parser.add_argument("--min-blob", type=float, default=MIN_BLOB, help="Minimum contour area to accept target")
+    parser.add_argument(
+        "--target-rgb",
+        default=None,
+        help="Hardcoded target RGB as R,G,B. Example: --target-rgb 36,89,133",
+    )
+    parser.add_argument(
+        "--use-default-target",
+        action="store_true",
+        help=f"Use built-in target RGB {DEFAULT_TARGET_RGB[0]},{DEFAULT_TARGET_RGB[1]},{DEFAULT_TARGET_RGB[2]}",
+    )
+    parser.add_argument("--no-gui", action="store_true", help="Run without OpenCV GUI; requires a hardcoded target")
     parser.add_argument("--dry-run", action="store_true", help="Show camera and print commands without using CAN")
     return parser.parse_args()
+
+
+def parse_rgb(text):
+    try:
+        parts = [int(part.strip()) for part in text.split(",")]
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError("RGB must be three integers: R,G,B") from exc
+    if len(parts) != 3 or any(part < 0 or part > 255 for part in parts):
+        raise argparse.ArgumentTypeError("RGB must be three integers from 0 to 255: R,G,B")
+    return tuple(parts)
+
+
+def rgb_to_hsv(rgb):
+    r, g, b = rgb
+    bgr = np.array([[[b, g, r]]], dtype=np.uint8)
+    hsv = cv2.cvtColor(bgr, cv2.COLOR_BGR2HSV)[0, 0]
+    return tuple(int(v) for v in hsv)
 
 
 def on_mouse(event, x, y, flags, param):
@@ -179,6 +208,24 @@ def main():
     global picked_hsv, picked_rgb, tracking, click_pos
 
     args = parse_args()
+    hardcoded_rgb = None
+    if args.use_default_target:
+        hardcoded_rgb = DEFAULT_TARGET_RGB
+    if args.target_rgb:
+        try:
+            hardcoded_rgb = parse_rgb(args.target_rgb)
+        except argparse.ArgumentTypeError as exc:
+            print(f"Invalid --target-rgb: {exc}")
+            return
+    if args.no_gui and hardcoded_rgb is None:
+        print("--no-gui requires --target-rgb R,G,B or --use-default-target")
+        return
+
+    if hardcoded_rgb is not None:
+        picked_rgb = hardcoded_rgb
+        picked_hsv = rgb_to_hsv(hardcoded_rgb)
+        tracking = True
+        print(f"Using target RGB{picked_rgb} HSV{picked_hsv}")
 
     if platform.system() == "Linux":
         cap = cv2.VideoCapture(args.camera, cv2.CAP_V4L2)
@@ -188,12 +235,13 @@ def main():
         print(f"Cannot open camera index {args.camera}")
         return
 
-    try:
-        cv2.namedWindow("Jetson Camera Control")
-        cv2.setMouseCallback("Jetson Camera Control", on_mouse)
-    except cv2.error:
-        cap.release()
-        raise
+    if not args.no_gui:
+        try:
+            cv2.namedWindow("Jetson Camera Control")
+            cv2.setMouseCallback("Jetson Camera Control", on_mouse)
+        except cv2.error:
+            cap.release()
+            raise
 
     mc = None
     if not args.dry_run:
@@ -201,18 +249,23 @@ def main():
         mc.connect()
         if mc.bus is None:
             cap.release()
-            cv2.destroyAllWindows()
+            if not args.no_gui:
+                cv2.destroyAllWindows()
             print("CAN is unavailable. Exiting before enabling camera control.")
             return
         if not mc.connected:
             cap.release()
-            cv2.destroyAllWindows()
+            if not args.no_gui:
+                cv2.destroyAllWindows()
             mc.shutdown()
             print("No ODrives found. Exiting before enabling camera control.")
             return
         mc.arm_all()
 
-    print("Click target color. Press SPACE to track, S to stop, R to re-pick, Q to quit.")
+    if args.no_gui:
+        print("Headless tracking. Press Ctrl+C to stop.")
+    else:
+        print("Click target color. Press SPACE to track, S to stop, R to re-pick, Q to quit.")
     if args.dry_run:
         print("DRY RUN: CAN is disabled.")
 
@@ -278,29 +331,30 @@ def main():
             else:
                 command_text = ""
 
-            draw_overlay(frame, args.deadzone, command_text)
-            cv2.imshow("Jetson Camera Control", frame)
+            if not args.no_gui:
+                draw_overlay(frame, args.deadzone, command_text)
+                cv2.imshow("Jetson Camera Control", frame)
 
-            key = cv2.waitKey(1) & 0xFF
-            if key in (ord("q"), 27):
-                break
-            if key == ord(" ") and picked_hsv:
-                tracking = True
-                print("Tracking started.")
-            elif key == ord("r"):
-                tracking = False
-                picked_hsv = None
-                picked_rgb = None
-                if driving:
-                    stop_drive(mc, args.dry_run)
-                    driving = False
-                print("Re-pick target color.")
-            elif key == ord("s"):
-                tracking = False
-                if driving:
-                    stop_drive(mc, args.dry_run)
-                    driving = False
-                print("Stopped tracking.")
+                key = cv2.waitKey(1) & 0xFF
+                if key in (ord("q"), 27):
+                    break
+                if key == ord(" ") and picked_hsv:
+                    tracking = True
+                    print("Tracking started.")
+                elif key == ord("r"):
+                    tracking = False
+                    picked_hsv = None
+                    picked_rgb = None
+                    if driving:
+                        stop_drive(mc, args.dry_run)
+                        driving = False
+                    print("Re-pick target color.")
+                elif key == ord("s"):
+                    tracking = False
+                    if driving:
+                        stop_drive(mc, args.dry_run)
+                        driving = False
+                    print("Stopped tracking.")
 
     except KeyboardInterrupt:
         print("\nInterrupted.")
@@ -308,7 +362,8 @@ def main():
         if driving:
             stop_drive(mc, args.dry_run)
         cap.release()
-        cv2.destroyAllWindows()
+        if not args.no_gui:
+            cv2.destroyAllWindows()
         if mc:
             mc.shutdown()
         print("Done.")

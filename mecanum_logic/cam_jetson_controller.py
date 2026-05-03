@@ -54,8 +54,6 @@ def parse_args():
     parser.add_argument("--max-strafe", type=float, default=MAX_STRAFE, help="Max strafe speed in turns/s")
     parser.add_argument("--deadzone", type=float, default=DEADZONE, help="Centered deadzone as fraction of frame width")
     parser.add_argument("--min-blob", type=float, default=MIN_BLOB, help="Minimum contour area to accept target")
-    parser.add_argument("--scan-attempts", type=int, default=2, help="ODrive scan attempts before starting camera loop")
-    parser.add_argument("--scan-seconds", type=float, default=2.0, help="Seconds per ODrive scan attempt")
     parser.add_argument("--dry-run", action="store_true", help="Show camera and print commands without using CAN")
     return parser.parse_args()
 
@@ -199,11 +197,7 @@ def main():
 
     mc = None
     if not args.dry_run:
-        mc = MecanumCAN(
-            current_limit=30.0,
-            scan_attempts=args.scan_attempts,
-            scan_seconds=args.scan_seconds,
-        )
+        mc = MecanumCAN(current_limit=30.0)
         mc.connect()
         if mc.bus is None:
             cap.release()

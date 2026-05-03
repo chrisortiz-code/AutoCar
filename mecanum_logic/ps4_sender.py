@@ -20,8 +20,8 @@ JETSON_PORT = 5555
 # ── Tuning ──────────────────────────────────────────────────────────
 DEADZONE   = 0.12
 CYCLE_HZ   = 20
-BASE_VEL   = 3.0    # turns/s normal
-SPRINT_VEL = 7.0    # turns/s with R2
+BASE_VEL   = 6.0    # turns/s normal
+SPRINT_VEL = 10.0   # turns/s with R2
 
 # PS4 axes / buttons (SDL mapping)
 AXIS_LX, AXIS_LY = 0, 1
@@ -110,7 +110,7 @@ def main():
 
             if has_input:
                 vx = -ly   # up = forward
-                vy = lx    # right = strafe right
+                vy = -lx   # right = strafe right
 
                 pkt = b'D' + struct.pack('<ffff', vx, vy, trans_speed, rot_speed)
                 sock.sendto(pkt, dest)

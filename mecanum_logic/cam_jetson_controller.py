@@ -20,6 +20,7 @@ centered in the camera frame.
 """
 
 import argparse
+import platform
 import time
 
 import cv2
@@ -178,21 +179,28 @@ def main():
     global picked_hsv, picked_rgb, tracking, click_pos
 
     args = parse_args()
+
+    if platform.system() == "Linux":
+        cap = cv2.VideoCapture(args.camera, cv2.CAP_V4L2)
+    else:
+        cap = cv2.VideoCapture(args.camera)
+    if not cap.isOpened():
+        print(f"Cannot open camera index {args.camera}")
+        return
+
+    try:
+        cv2.namedWindow("Jetson Camera Control")
+        cv2.setMouseCallback("Jetson Camera Control", on_mouse)
+    except cv2.error:
+        cap.release()
+        raise
+
     mc = None
     if not args.dry_run:
         mc = MecanumCAN(current_limit=30.0)
         mc.connect()
         mc.arm_all()
 
-    cap = cv2.VideoCapture(args.camera)
-    if not cap.isOpened():
-        print(f"Cannot open camera index {args.camera}")
-        if mc:
-            mc.shutdown()
-        return
-
-    cv2.namedWindow("Jetson Camera Control")
-    cv2.setMouseCallback("Jetson Camera Control", on_mouse)
     print("Click target color. Press SPACE to track, S to stop, R to re-pick, Q to quit.")
     if args.dry_run:
         print("DRY RUN: CAN is disabled.")

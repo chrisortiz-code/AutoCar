@@ -44,7 +44,8 @@ RAMP_PCT           = 0.15
 
 
 class MecanumCAN:
-    def __init__(self, max_vel=MAX_VEL, current_limit=CURRENT_LIMIT):
+    def __init__(self, max_vel=MAX_VEL, current_limit=CURRENT_LIMIT,
+                 scan_attempts=5, scan_seconds=3.0):
         self.bus = None
         self.armed = set()
         self.connected = set()
@@ -52,6 +53,8 @@ class MecanumCAN:
         self.currents = {nid: 0.0 for nid in ALL_IDS}
         self.max_vel = max_vel
         self.current_limit = current_limit
+        self.scan_attempts = scan_attempts
+        self.scan_seconds = scan_seconds
 
     # ── CAN low-level ───────────────────────────────────────────────
     def send(self, node_id, cmd_id, data=b''):
@@ -96,10 +99,10 @@ class MecanumCAN:
             candidate_bus = can.Bus(interface='gs_usb', channel=0, bitrate=1000000)
             self.bus = candidate_bus
             print("CAN bus connected!")
-            for attempt in range(5):
-                print(f"Scanning for ODrives (attempt {attempt+1}/5)...")
+            for attempt in range(self.scan_attempts):
+                print(f"Scanning for ODrives (attempt {attempt+1}/{self.scan_attempts})...")
                 start = time.time()
-                while time.time() - start < 3:
+                while time.time() - start < self.scan_seconds:
                     msg = self.bus.recv(timeout=0.5)
                     if msg:
                         node_id = msg.arbitration_id >> 5

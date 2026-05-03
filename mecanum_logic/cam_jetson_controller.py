@@ -199,6 +199,11 @@ def main():
     if not args.dry_run:
         mc = MecanumCAN(current_limit=30.0)
         mc.connect()
+        if mc.bus is None:
+            cap.release()
+            cv2.destroyAllWindows()
+            print("CAN is unavailable. Exiting before enabling camera control.")
+            return
         mc.arm_all()
 
     print("Click target color. Press SPACE to track, S to stop, R to re-pick, Q to quit.")

@@ -91,8 +91,10 @@ class MecanumCAN:
 
     # ── Connection ──────────────────────────────────────────────────
     def connect(self):
+        candidate_bus = None
         try:
-            self.bus = can.Bus(interface='gs_usb', channel=0, bitrate=1000000)
+            candidate_bus = can.Bus(interface='gs_usb', channel=0, bitrate=1000000)
+            self.bus = candidate_bus
             print("CAN bus connected!")
             for attempt in range(5):
                 print(f"Scanning for ODrives (attempt {attempt+1}/5)...")
@@ -113,6 +115,11 @@ class MecanumCAN:
             threading.Thread(target=self._listener, daemon=True).start()
         except Exception as e:
             print(f"CAN connection failed: {e}")
+            if candidate_bus is not None:
+                try:
+                    candidate_bus.shutdown()
+                except Exception:
+                    pass
             self.bus = None
 
     def shutdown(self):

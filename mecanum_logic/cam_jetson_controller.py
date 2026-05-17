@@ -33,9 +33,9 @@ from can_bus import MecanumCAN
 
 # Color matching. These are intentionally broad so more of the target object is
 # included in the detected contour instead of only the exact clicked shade.
-HSV_TOL_H = 35
-HSV_TOL_S = 100
-HSV_TOL_V = 100
+HSV_TOL_H = 60
+HSV_TOL_S = 160
+HSV_TOL_V = 160
 
 # Tracking and safety.
 DEADZONE = 0.10      # center 10% of frame means no sideways correction

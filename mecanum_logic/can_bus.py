@@ -7,6 +7,7 @@ import math
 import struct
 import threading
 import time
+import gc
 
 import can
 
@@ -72,6 +73,40 @@ class MecanumCAN:
                     print(f"CAN send error node {node_id} cmd 0x{cmd_id:02X}: {e}")
                 time.sleep(0.05)
 
+    def _request(self, node_id, cmd_id, dlc=8):
+        if self.bus is None:
+            return
+        try:
+            self.bus.send(can.Message(
+                arbitration_id=(node_id << 5) | cmd_id,
+                is_remote_frame=True,
+                is_extended_id=False,
+                dlc=dlc,
+            ))
+        except Exception:
+            pass
+
+    def _remember_node(self, node_id):
+        if node_id in MOTORS and node_id not in self.connected:
+            self.connected.add(node_id)
+            print(f"  Found node {node_id} = {MOTORS[node_id]['role']}")
+
+    def _drain_rx(self, duration=0.2):
+        if self.bus is None:
+            return
+        end = time.time() + duration
+        while time.time() < end:
+            try:
+                if self.bus.recv(timeout=0.02) is None:
+                    break
+            except Exception:
+                break
+
+    def _probe_nodes(self):
+        for nid in ALL_IDS:
+            self._request(nid, CMD_ENCODER_EST, dlc=8)
+            self._request(nid, CMD_GET_IQ, dlc=8)
+
     def _listener(self):
         while not self._closed and self.bus:
             try:
@@ -95,18 +130,20 @@ class MecanumCAN:
     def connect(self):
         try:
             self._closed = False
+            self.connected.clear()
+            self.armed.clear()
             self.bus = can.Bus(interface='gs_usb', channel=0, bitrate=1000000)
             print("CAN bus connected!")
+            self._drain_rx()
             for attempt in range(5):
                 print(f"Scanning for ODrives (attempt {attempt+1}/5)...")
+                self._probe_nodes()
                 start = time.time()
                 while time.time() - start < 3:
                     msg = self.bus.recv(timeout=0.5)
                     if msg:
                         node_id = msg.arbitration_id >> 5
-                        if node_id in MOTORS and node_id not in self.connected:
-                            self.connected.add(node_id)
-                            print(f"  Found node {node_id} = {MOTORS[node_id]['role']}")
+                        self._remember_node(node_id)
                 if self.connected:
                     break
                 print("  No ODrives yet, retrying...")
@@ -127,6 +164,7 @@ class MecanumCAN:
                 except:
                     pass
             self.bus = None
+            gc.collect()
 
     def shutdown(self):
         bus = self.bus
@@ -134,11 +172,11 @@ class MecanumCAN:
             self._closed = True
             return
 
-        print("Shutting down motors...")
+        print("Stopping motors and closing CAN...")
         try:
-            self.stop_all()
+            self.zero_vel()
         except Exception as e:
-            print(f"Motor shutdown warning: {e}")
+            print(f"Motor stop warning: {e}")
 
         self._closed = True
         if self._listener_thread and self._listener_thread.is_alive():
@@ -152,7 +190,8 @@ class MecanumCAN:
 
         self.bus = None
         self.armed.clear()
-        time.sleep(0.5)
+        gc.collect()
+        time.sleep(0.2)
         print("Done.")
 
     # ── Motor control ───────────────────────────────────────────────

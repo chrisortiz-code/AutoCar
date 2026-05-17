@@ -47,6 +47,7 @@ MAX_STRAFE = 3.0     # turns/s at full camera offset
 MAX_RANGE_SPEED = 2.0
 MIN_BLOB = 500       # minimum matching contour area in pixels
 CONTROL_HZ = 20
+MOTION_DEBUG_INTERVAL = 0.5
 SAMPLE_SIZE = 5
 DEFAULT_TARGET_RGB = (36, 89, 133)
 
@@ -72,6 +73,7 @@ def parse_args():
     parser.add_argument("--s-tol", type=int, default=HSV_TOL_S, help="HSV saturation tolerance")
     parser.add_argument("--v-tol", type=int, default=HSV_TOL_V, help="HSV value tolerance")
     parser.add_argument("--min-blob", type=float, default=MIN_BLOB, help="Minimum contour area to accept target")
+    parser.add_argument("--debug-interval", type=float, default=MOTION_DEBUG_INTERVAL, help="Seconds between dry-run motion logs")
     parser.add_argument(
         "--target-rgb",
         default=None,
@@ -188,6 +190,25 @@ def pick_target_area(frame_bgr, hsv_center, min_blob, h_tol, s_tol, v_tol):
     return None
 
 
+def draw_target_highlight(frame, target, color, label):
+    if not target:
+        return
+    x = target["x"]
+    y = target["y"]
+    area = target["area"]
+    cv2.drawContours(frame, [target["contour"]], -1, color, 2)
+    cv2.circle(frame, (x, y), 6, color, -1)
+    cv2.putText(
+        frame,
+        f"{label} area={area:.0f}",
+        (max(5, x - 70), max(20, y - 12)),
+        cv2.FONT_HERSHEY_SIMPLEX,
+        0.5,
+        color,
+        1,
+    )
+
+
 def draw_overlay(frame, deadzone, command_text):
     fh, fw = frame.shape[:2]
     center_x = fw // 2
@@ -233,10 +254,23 @@ def stop_drive(mc, dry_run):
 
 
 def drive_vector(mc, dry_run, vx, vy, speed):
-    if dry_run:
-        print(f"DRIVE vx={vx:+.2f} vy={vy:+.2f} trans_speed={speed:.2f} rot=0.00")
-    else:
+    if not dry_run:
         mc.drive(vx, vy, speed, 0.0)
+
+
+def maybe_print_motion_debug(args, last_debug, mode, **values):
+    if not args.dry_run:
+        return last_debug
+    now = time.time()
+    if now - last_debug < args.debug_interval:
+        return last_debug
+
+    detail = " ".join(
+        f"{key}={value:+.2f}" if isinstance(value, float) else f"{key}={value}"
+        for key, value in values.items()
+    )
+    print(f"[motion] {mode} {detail}")
+    return now
 
 
 def main():
@@ -334,6 +368,7 @@ def main():
     command_text = ""
     last_edge_vy = 0.0
     last_edge_time = 0.0
+    last_debug = 0.0
 
     try:
         while True:
@@ -344,13 +379,26 @@ def main():
 
             fh, fw = frame.shape[:2]
             frame_center_x = fw // 2
+            selected_target = None
+
+            if picked_hsv and not tracking:
+                selected_target, _ = find_target(
+                    frame,
+                    picked_hsv,
+                    args.min_blob,
+                    args.h_tol,
+                    args.s_tol,
+                    args.v_tol,
+                )
+                if selected_target:
+                    draw_target_highlight(frame, selected_target, (0, 255, 255), "selected")
 
             if click_pos is not None:
                 x, y = click_pos
                 click_pos = None
                 if 0 <= x < fw and 0 <= y < fh:
                     picked_hsv, picked_rgb = sample_color(frame, x, y)
-                    target_area = pick_target_area(
+                    selected_target, _ = find_target(
                         frame,
                         picked_hsv,
                         args.min_blob,
@@ -358,11 +406,14 @@ def main():
                         args.s_tol,
                         args.v_tol,
                     )
+                    target_area = selected_target["area"] if selected_target else None
                     tracking = False
                     if driving:
                         stop_drive(mc, args.dry_run)
                         driving = False
                         state["driving"] = False
+                    if selected_target:
+                        draw_target_highlight(frame, selected_target, (0, 255, 255), "selected")
                     if target_area:
                         print(f"Picked RGB{picked_rgb} HSV{picked_hsv} area={target_area:.0f}")
                     else:
@@ -385,8 +436,7 @@ def main():
                     if target_area is None:
                         target_area = area
                         print(f"Target area set to {target_area:.0f}")
-                    cv2.drawContours(frame, [target["contour"]], -1, (0, 255, 0), 2)
-                    cv2.circle(frame, (bx, by), 6, (0, 0, 255), -1)
+                    draw_target_highlight(frame, target, (0, 255, 0), "tracking")
 
                     error = (bx - frame_center_x) / frame_center_x
                     if now - last_control >= interval:
@@ -426,6 +476,18 @@ def main():
                                 f"xerr={error:+.2f} aerr={area_error:+.2f} "
                                 f"vx={range_cmd:+.2f} vy={lateral_cmd:+.2f} spd={speed:.2f}"
                             )
+                        last_debug = maybe_print_motion_debug(
+                            args,
+                            last_debug,
+                            "track",
+                            xerr=error,
+                            area=area,
+                            desired=target_area,
+                            aerr=area_error,
+                            vx=range_cmd,
+                            vy=lateral_cmd,
+                            speed=speed,
+                        )
                         last_control = now
                 else:
                     now = time.time()
@@ -440,12 +502,21 @@ def main():
                         state["driving"] = True
                         last_control = now
                         command_text = f"EDGE LOST reacquire vy={last_edge_vy:+.2f}"
+                        last_debug = maybe_print_motion_debug(
+                            args,
+                            last_debug,
+                            "edge-reacquire",
+                            vx=0.0,
+                            vy=last_edge_vy,
+                            speed=speed,
+                        )
                     else:
                         if driving:
                             stop_drive(mc, args.dry_run)
                             driving = False
                             state["driving"] = False
                         command_text = "OBJECT NOT SEEN"
+                        last_debug = maybe_print_motion_debug(args, last_debug, "lost")
                     cv2.putText(frame, command_text, (10, 70), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 255), 2)
             else:
                 command_text = ""
@@ -479,6 +550,7 @@ def main():
                     target_area = None
                     last_edge_vy = 0.0
                     last_edge_time = 0.0
+                    last_debug = 0.0
                     if driving:
                         stop_drive(mc, args.dry_run)
                         driving = False
@@ -488,6 +560,7 @@ def main():
                     tracking = False
                     last_edge_vy = 0.0
                     last_edge_time = 0.0
+                    last_debug = 0.0
                     if driving:
                         stop_drive(mc, args.dry_run)
                         driving = False

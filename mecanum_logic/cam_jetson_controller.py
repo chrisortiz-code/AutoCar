@@ -1,11 +1,14 @@
 """
-Jetson local camera color tracking -> CAN motor control.
+Jetson local camera color tracking -> motor control.
 
 Run this on the Jetson with the webcam plugged into the Jetson.
+For the most reliable CAN behavior, run universal_receiver.py separately and
+start this file with --udp-control so only one process owns the CAN adapter.
 
 Usage:
     python cam_jetson_controller.py
     python cam_jetson_controller.py --camera 1
+    python cam_jetson_controller.py --udp-control
 
 Controls:
     Click      pick target color from the live camera feed
@@ -23,6 +26,8 @@ import argparse
 import atexit
 import platform
 import signal
+import socket
+import struct
 import time
 
 import cv2
@@ -53,6 +58,8 @@ CONTROL_HZ = 20
 MOTION_DEBUG_INTERVAL = 0.5
 SAMPLE_SIZE = 5
 DEFAULT_TARGET_RGB = (36, 89, 133)
+DEFAULT_UDP_HOST = "127.0.0.1"
+DEFAULT_UDP_PORT = 5555
 
 
 picked_hsv = None
@@ -82,6 +89,9 @@ def parse_args():
     parser.add_argument("--dark-rgb-margin", type=int, default=DARK_RGB_MARGIN, help="RGB channel margin above a dark picked target")
     parser.add_argument("--min-blob", type=float, default=MIN_BLOB, help="Minimum contour area to accept target")
     parser.add_argument("--debug-interval", type=float, default=MOTION_DEBUG_INTERVAL, help="Seconds between dry-run motion logs")
+    parser.add_argument("--udp-control", action="store_true", help="Send drive commands to universal_receiver.py instead of opening CAN")
+    parser.add_argument("--udp-host", default=DEFAULT_UDP_HOST, help="UDP receiver host for --udp-control")
+    parser.add_argument("--udp-port", type=int, default=DEFAULT_UDP_PORT, help="UDP receiver port for --udp-control")
     parser.add_argument(
         "--target-rgb",
         default=None,
@@ -309,15 +319,22 @@ def draw_overlay(frame, deadzone, command_text):
     cv2.putText(frame, status, (10, fh - 15), cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 1)
 
 
-def stop_drive(mc, dry_run):
+def stop_drive(mc, dry_run, udp_sock=None, udp_dest=None):
     if dry_run:
         print("STOP")
+    elif udp_sock and udp_dest:
+        udp_sock.sendto(b"S", udp_dest)
     else:
         mc.zero_vel()
 
 
-def drive_vector(mc, dry_run, vx, vy, speed):
-    if not dry_run:
+def drive_vector(mc, dry_run, vx, vy, speed, udp_sock=None, udp_dest=None):
+    if dry_run:
+        return
+    if udp_sock and udp_dest:
+        pkt = b"D" + struct.pack("<ffff", vx, vy, speed, 0.0)
+        udp_sock.sendto(pkt, udp_dest)
+    else:
         mc.drive(vx, vy, speed, 0.0)
 
 
@@ -340,18 +357,20 @@ def main():
     global picked_hsv, picked_rgb, target_area, target_hint_pos, last_target_pos, tracking, click_pos
 
     args = parse_args()
-    state = {"mc": None, "cap": None, "driving": False, "cleaned": False}
+    state = {"mc": None, "cap": None, "udp_sock": None, "udp_dest": None, "driving": False, "cleaned": False}
 
     def cleanup():
         if state["cleaned"]:
             return
         state["cleaned"] = True
-        if state["driving"] and state["mc"]:
-            stop_drive(state["mc"], args.dry_run)
+        if state["driving"] and (state["mc"] or state["udp_sock"] or args.dry_run):
+            stop_drive(state["mc"], args.dry_run, state["udp_sock"], state["udp_dest"])
         if state["cap"]:
             state["cap"].release()
         if not args.no_gui:
             cv2.destroyAllWindows()
+        if state["udp_sock"]:
+            state["udp_sock"].close()
         if state["mc"]:
             state["mc"].shutdown()
 
@@ -399,7 +418,16 @@ def main():
             raise
 
     mc = None
-    if not args.dry_run:
+    udp_sock = None
+    udp_dest = None
+    if args.udp_control and not args.dry_run:
+        udp_sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        udp_dest = (args.udp_host, args.udp_port)
+        state["udp_sock"] = udp_sock
+        state["udp_dest"] = udp_dest
+        print(f"UDP control enabled -> {args.udp_host}:{args.udp_port}")
+
+    if not args.dry_run and not args.udp_control:
         mc = MecanumCAN(current_limit=30.0)
         state["mc"] = mc
         mc.connect()
@@ -424,6 +452,8 @@ def main():
         print("Click target color. Press SPACE to track, S to stop, R to re-pick, Q to quit.")
     if args.dry_run:
         print("DRY RUN: CAN is disabled.")
+    elif args.udp_control:
+        print("CAN is owned by universal_receiver.py; this process only sends UDP commands.")
 
     interval = 1.0 / CONTROL_HZ
     last_control = 0.0
@@ -484,7 +514,7 @@ def main():
                     target_area = selected_target["area"] if selected_target else None
                     tracking = False
                     if driving:
-                        stop_drive(mc, args.dry_run)
+                        stop_drive(mc, args.dry_run, udp_sock, udp_dest)
                         driving = False
                         state["driving"] = False
                     if selected_target:
@@ -545,12 +575,12 @@ def main():
                         )
                         if speed <= 0.01:
                             if driving:
-                                stop_drive(mc, args.dry_run)
+                                stop_drive(mc, args.dry_run, udp_sock, udp_dest)
                                 driving = False
                                 state["driving"] = False
                             command_text = f"locked err={error:+.2f} area={area:.0f}/{target_area:.0f}"
                         else:
-                            drive_vector(mc, args.dry_run, range_cmd, lateral_cmd, speed)
+                            drive_vector(mc, args.dry_run, range_cmd, lateral_cmd, speed, udp_sock, udp_dest)
                             driving = True
                             state["driving"] = True
                             command_text = (
@@ -578,7 +608,7 @@ def main():
                         and now - last_control >= interval
                     ):
                         speed = args.max_strafe * 0.45
-                        drive_vector(mc, args.dry_run, 0.0, last_edge_vy, speed)
+                        drive_vector(mc, args.dry_run, 0.0, last_edge_vy, speed, udp_sock, udp_dest)
                         driving = True
                         state["driving"] = True
                         last_control = now
@@ -593,7 +623,7 @@ def main():
                         )
                     else:
                         if driving:
-                            stop_drive(mc, args.dry_run)
+                            stop_drive(mc, args.dry_run, udp_sock, udp_dest)
                             driving = False
                             state["driving"] = False
                         command_text = "OBJECT NOT SEEN"
@@ -640,7 +670,7 @@ def main():
                     last_edge_time = 0.0
                     last_debug = 0.0
                     if driving:
-                        stop_drive(mc, args.dry_run)
+                        stop_drive(mc, args.dry_run, udp_sock, udp_dest)
                         driving = False
                         state["driving"] = False
                     print("Re-pick target color.")
@@ -651,7 +681,7 @@ def main():
                     last_edge_time = 0.0
                     last_debug = 0.0
                     if driving:
-                        stop_drive(mc, args.dry_run)
+                        stop_drive(mc, args.dry_run, udp_sock, udp_dest)
                         driving = False
                         state["driving"] = False
                     print("Stopped tracking.")

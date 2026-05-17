@@ -32,6 +32,8 @@ CMD_GET_IQ         = 0x14
 # ── Defaults ────────────────────────────────────────────────────────
 MAX_VEL       = 10.0   # turns/s velocity limit
 CURRENT_LIMIT = 30.0   # amps
+CAN_BITRATE    = 1000000
+SCAN_ATTEMPTS  = 5
 
 # ── Drive constants ─────────────────────────────────────────────────
 WHEEL_DIAMETER     = 11.75      # cm
@@ -107,6 +109,36 @@ class MecanumCAN:
             self._request(nid, CMD_ENCODER_EST, dlc=8)
             self._request(nid, CMD_GET_IQ, dlc=8)
 
+    def _open_bus(self):
+        self.bus = can.Bus(interface='gs_usb', channel=0, bitrate=CAN_BITRATE)
+        print("CAN bus connected!")
+        self._drain_rx()
+
+    def _close_bus(self):
+        bus = self.bus
+        self.bus = None
+        if bus is not None:
+            try:
+                bus.shutdown()
+            except Exception as e:
+                print(f"CAN shutdown warning: {e}")
+        gc.collect()
+        time.sleep(0.3)
+
+    def _scan_for_odrives(self, attempts=SCAN_ATTEMPTS):
+        for attempt in range(attempts):
+            print(f"Scanning for ODrives (attempt {attempt+1}/{attempts})...")
+            self._probe_nodes()
+            start = time.time()
+            while time.time() - start < 3:
+                msg = self.bus.recv(timeout=0.5)
+                if msg:
+                    node_id = msg.arbitration_id >> 5
+                    self._remember_node(node_id)
+            if self.connected:
+                break
+            print("  No ODrives yet, retrying...")
+
     def _listener(self):
         while not self._closed and self.bus:
             try:
@@ -132,21 +164,13 @@ class MecanumCAN:
             self._closed = False
             self.connected.clear()
             self.armed.clear()
-            self.bus = can.Bus(interface='gs_usb', channel=0, bitrate=1000000)
-            print("CAN bus connected!")
-            self._drain_rx()
-            for attempt in range(5):
-                print(f"Scanning for ODrives (attempt {attempt+1}/5)...")
-                self._probe_nodes()
-                start = time.time()
-                while time.time() - start < 3:
-                    msg = self.bus.recv(timeout=0.5)
-                    if msg:
-                        node_id = msg.arbitration_id >> 5
-                        self._remember_node(node_id)
-                if self.connected:
-                    break
-                print("  No ODrives yet, retrying...")
+            self._open_bus()
+            self._scan_for_odrives()
+            if not self.connected:
+                print("No ODrives found on first scan. Reopening CAN adapter once...")
+                self._close_bus()
+                self._open_bus()
+                self._scan_for_odrives(attempts=3)
             print(f"Connected: {sorted(self.connected)}")
             if not self.connected:
                 print("WARNING: No ODrives found.")
@@ -158,13 +182,7 @@ class MecanumCAN:
         except Exception as e:
             print(f"CAN connection failed: {e}")
             self._closed = True
-            if self.bus:
-                try:
-                    self.bus.shutdown()
-                except:
-                    pass
-            self.bus = None
-            gc.collect()
+            self._close_bus()
 
     def shutdown(self):
         bus = self.bus
@@ -172,26 +190,20 @@ class MecanumCAN:
             self._closed = True
             return
 
+        print("Stopping CAN listener...")
+        self._closed = True
+        if self._listener_thread and self._listener_thread.is_alive():
+            self._listener_thread.join(timeout=2.0)
+        self._listener_thread = None
+
         print("Stopping motors and closing CAN...")
         try:
             self.zero_vel()
         except Exception as e:
             print(f"Motor stop warning: {e}")
 
-        self._closed = True
-        if self._listener_thread and self._listener_thread.is_alive():
-            self._listener_thread.join(timeout=2.0)
-        self._listener_thread = None
-
-        try:
-            bus.shutdown()
-        except Exception as e:
-            print(f"CAN shutdown warning: {e}")
-
-        self.bus = None
+        self._close_bus()
         self.armed.clear()
-        gc.collect()
-        time.sleep(0.2)
         print("Done.")
 
     # ── Motor control ───────────────────────────────────────────────

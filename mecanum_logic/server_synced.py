@@ -2,6 +2,7 @@ import math
 import time
 import struct
 import threading
+import gc
 import can
 from flask import Flask, request, jsonify
 from flask_cors import CORS
@@ -21,6 +22,7 @@ MOTORS = {
 ALL_IDS = list(MOTORS.keys())
 MAX_VEL = 10.0
 bus = None
+shutting_down = False
 armed = set()
 connected = set()
 positions = {nid: 0.0 for nid in ALL_IDS}
@@ -52,7 +54,7 @@ def send_can(node_id, cmd_id, data=b''):
             time.sleep(0.05)
 
 def can_listener():
-    while bus:
+    while bus and not shutting_down:
         try:
             msg = bus.recv(timeout=1)
             if msg is None:
@@ -361,6 +363,10 @@ def wheel_status():
     })
 
 def shutdown_motors():
+    global bus, shutting_down
+    if shutting_down:
+        return
+    shutting_down = True
     print("\nShutting down...")
     if bus:
         for nid in ALL_IDS:
@@ -371,18 +377,15 @@ def shutdown_motors():
                     is_extended_id=False,
                 )
                 bus.send(msg, timeout=0.1)
-                msg = can.Message(
-                    arbitration_id=(nid << 5) | CMD_SET_AXIS_STATE,
-                    data=struct.pack('<I', 1),
-                    is_extended_id=False,
-                )
-                bus.send(msg, timeout=0.1)
             except:
                 pass
+        time.sleep(0.2)
         try:
             bus.shutdown()
         except:
             pass
+        bus = None
+        gc.collect()
     print("Done.")
 
 if __name__ == "__main__":

@@ -15,8 +15,8 @@ Controls:
     Q / ESC    quit
 
 The controller thresholds pixels near the selected HSV color, cleans the mask,
-finds the largest target blob, and drives sideways until that blob's centroid is
-centered in the camera frame.
+finds the largest target blob, and drives sideways/forward/backward until that
+blob's centroid and apparent area match the picked target.
 """
 
 import argparse
@@ -31,14 +31,20 @@ import numpy as np
 from can_bus import MecanumCAN
 
 
-# Color matching. Start loose, then tune on the real lighting.
-HSV_TOL_H = 15
-HSV_TOL_S = 50
-HSV_TOL_V = 50
+# Color matching. These are intentionally broad so more of the target object is
+# included in the detected contour instead of only the exact clicked shade.
+HSV_TOL_H = 35
+HSV_TOL_S = 100
+HSV_TOL_V = 100
 
 # Tracking and safety.
-DEADZONE = 0.6       # center 10% of frame means stop
+DEADZONE = 0.10      # center 10% of frame means no sideways correction
+AREA_DEADZONE = 0.18 # area can vary this much before forward/back correction
+AREA_GAIN = 0.70     # larger values make area/distance correction softer
+EDGE_THRESHOLD = 0.78
+EDGE_REACQUIRE_SECONDS = 1.2
 MAX_STRAFE = 3.0     # turns/s at full camera offset
+MAX_RANGE_SPEED = 2.0
 MIN_BLOB = 500       # minimum matching contour area in pixels
 CONTROL_HZ = 20
 SAMPLE_SIZE = 5
@@ -47,6 +53,7 @@ DEFAULT_TARGET_RGB = (36, 89, 133)
 
 picked_hsv = None
 picked_rgb = None
+target_area = None
 tracking = False
 click_pos = None
 
@@ -55,7 +62,15 @@ def parse_args():
     parser = argparse.ArgumentParser(description="Jetson local camera color controller")
     parser.add_argument("--camera", type=int, default=0, help="OpenCV camera index")
     parser.add_argument("--max-strafe", type=float, default=MAX_STRAFE, help="Max strafe speed in turns/s")
+    parser.add_argument("--max-range-speed", type=float, default=MAX_RANGE_SPEED, help="Max forward/back speed in turns/s")
     parser.add_argument("--deadzone", type=float, default=DEADZONE, help="Centered deadzone as fraction of frame width")
+    parser.add_argument("--area-deadzone", type=float, default=AREA_DEADZONE, help="Accepted area error before forward/back correction")
+    parser.add_argument("--area-gain", type=float, default=AREA_GAIN, help="Area error that maps to full forward/back command")
+    parser.add_argument("--edge-threshold", type=float, default=EDGE_THRESHOLD, help="Horizontal error that counts as near the frame edge")
+    parser.add_argument("--edge-reacquire-seconds", type=float, default=EDGE_REACQUIRE_SECONDS, help="How long to keep moving after losing an edge target")
+    parser.add_argument("--h-tol", type=int, default=HSV_TOL_H, help="HSV hue tolerance")
+    parser.add_argument("--s-tol", type=int, default=HSV_TOL_S, help="HSV saturation tolerance")
+    parser.add_argument("--v-tol", type=int, default=HSV_TOL_V, help="HSV value tolerance")
     parser.add_argument("--min-blob", type=float, default=MIN_BLOB, help="Minimum contour area to accept target")
     parser.add_argument(
         "--target-rgb",
@@ -89,6 +104,10 @@ def rgb_to_hsv(rgb):
     return tuple(int(v) for v in hsv)
 
 
+def clamp(value, low, high):
+    return max(low, min(high, value))
+
+
 def on_mouse(event, x, y, flags, param):
     global click_pos
     if event == cv2.EVENT_LBUTTONDOWN:
@@ -110,27 +129,27 @@ def sample_color(frame_bgr, x, y):
     return tuple(int(v) for v in avg_hsv), avg_rgb
 
 
-def color_mask(frame_bgr, hsv_center):
+def color_mask(frame_bgr, hsv_center, h_tol, s_tol, v_tol):
     hsv = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2HSV)
     h, s, v = hsv_center
 
-    lower = np.array([max(0, h - HSV_TOL_H), max(0, s - HSV_TOL_S), max(0, v - HSV_TOL_V)])
-    upper = np.array([min(179, h + HSV_TOL_H), min(255, s + HSV_TOL_S), min(255, v + HSV_TOL_V)])
+    lower = np.array([max(0, h - h_tol), max(0, s - s_tol), max(0, v - v_tol)])
+    upper = np.array([min(179, h + h_tol), min(255, s + s_tol), min(255, v + v_tol)])
 
-    if h - HSV_TOL_H < 0:
+    if h - h_tol < 0:
         mask1 = cv2.inRange(hsv, np.array([0, lower[1], lower[2]]), upper)
         mask2 = cv2.inRange(
             hsv,
-            np.array([180 + h - HSV_TOL_H, lower[1], lower[2]]),
+            np.array([180 + h - h_tol, lower[1], lower[2]]),
             np.array([179, upper[1], upper[2]]),
         )
         mask = cv2.bitwise_or(mask1, mask2)
-    elif h + HSV_TOL_H > 179:
+    elif h + h_tol > 179:
         mask1 = cv2.inRange(hsv, lower, np.array([179, upper[1], upper[2]]))
         mask2 = cv2.inRange(
             hsv,
             np.array([0, lower[1], lower[2]]),
-            np.array([h + HSV_TOL_H - 180, upper[1], upper[2]]),
+            np.array([h + h_tol - 180, upper[1], upper[2]]),
         )
         mask = cv2.bitwise_or(mask1, mask2)
     else:
@@ -142,8 +161,8 @@ def color_mask(frame_bgr, hsv_center):
     return mask
 
 
-def find_target(frame_bgr, hsv_center, min_blob):
-    mask = color_mask(frame_bgr, hsv_center)
+def find_target(frame_bgr, hsv_center, min_blob, h_tol, s_tol, v_tol):
+    mask = color_mask(frame_bgr, hsv_center, h_tol, s_tol, v_tol)
     contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
     if not contours:
         return None, mask
@@ -160,6 +179,13 @@ def find_target(frame_bgr, hsv_center, min_blob):
     cx = int(moments["m10"] / moments["m00"])
     cy = int(moments["m01"] / moments["m00"])
     return {"x": cx, "y": cy, "area": area, "contour": biggest}, mask
+
+
+def pick_target_area(frame_bgr, hsv_center, min_blob, h_tol, s_tol, v_tol):
+    target, _ = find_target(frame_bgr, hsv_center, min_blob, h_tol, s_tol, v_tol)
+    if target:
+        return target["area"]
+    return None
 
 
 def draw_overlay(frame, deadzone, command_text):
@@ -206,8 +232,15 @@ def stop_drive(mc, dry_run):
         mc.zero_vel()
 
 
+def drive_vector(mc, dry_run, vx, vy, speed):
+    if dry_run:
+        print(f"DRIVE vx={vx:+.2f} vy={vy:+.2f} trans_speed={speed:.2f} rot=0.00")
+    else:
+        mc.drive(vx, vy, speed, 0.0)
+
+
 def main():
-    global picked_hsv, picked_rgb, tracking, click_pos
+    global picked_hsv, picked_rgb, target_area, tracking, click_pos
 
     args = parse_args()
     state = {"mc": None, "cap": None, "driving": False, "cleaned": False}
@@ -299,6 +332,8 @@ def main():
     last_control = 0.0
     driving = False
     command_text = ""
+    last_edge_vy = 0.0
+    last_edge_time = 0.0
 
     try:
         while True:
@@ -315,46 +350,102 @@ def main():
                 click_pos = None
                 if 0 <= x < fw and 0 <= y < fh:
                     picked_hsv, picked_rgb = sample_color(frame, x, y)
+                    target_area = pick_target_area(
+                        frame,
+                        picked_hsv,
+                        args.min_blob,
+                        args.h_tol,
+                        args.s_tol,
+                        args.v_tol,
+                    )
                     tracking = False
                     if driving:
                         stop_drive(mc, args.dry_run)
                         driving = False
-                    print(f"Picked RGB{picked_rgb} HSV{picked_hsv}")
+                        state["driving"] = False
+                    if target_area:
+                        print(f"Picked RGB{picked_rgb} HSV{picked_hsv} area={target_area:.0f}")
+                    else:
+                        print(f"Picked RGB{picked_rgb} HSV{picked_hsv}; target area will set when tracking starts")
 
             if tracking and picked_hsv:
                 now = time.time()
-                target, mask = find_target(frame, picked_hsv, args.min_blob)
+                target, mask = find_target(
+                    frame,
+                    picked_hsv,
+                    args.min_blob,
+                    args.h_tol,
+                    args.s_tol,
+                    args.v_tol,
+                )
                 if target:
                     bx = target["x"]
                     by = target["y"]
                     area = target["area"]
+                    if target_area is None:
+                        target_area = area
+                        print(f"Target area set to {target_area:.0f}")
                     cv2.drawContours(frame, [target["contour"]], -1, (0, 255, 0), 2)
                     cv2.circle(frame, (bx, by), 6, (0, 0, 255), -1)
 
                     error = (bx - frame_center_x) / frame_center_x
                     if now - last_control >= interval:
-                        if abs(error) < args.deadzone:
+                        lateral_cmd = 0.0
+                        if abs(error) >= args.deadzone:
+                            lateral_cmd = -1.0 if error > 0 else 1.0
+                            lateral_mag = (abs(error) - args.deadzone) / (1.0 - args.deadzone)
+                            lateral_cmd *= clamp(lateral_mag, 0.0, 1.0)
+
+                        if abs(error) >= args.edge_threshold:
+                            last_edge_vy = -1.0 if error > 0 else 1.0
+                            last_edge_time = now
+
+                        range_cmd = 0.0
+                        area_error = 0.0
+                        if target_area and target_area > 0:
+                            area_error = (target_area - area) / target_area
+                            if abs(area_error) >= args.area_deadzone:
+                                range_mag = (abs(area_error) - args.area_deadzone) / max(0.01, args.area_gain)
+                                range_cmd = (1.0 if area_error > 0 else -1.0) * clamp(range_mag, 0.0, 1.0)
+
+                        speed = max(
+                            abs(lateral_cmd) * args.max_strafe,
+                            abs(range_cmd) * args.max_range_speed,
+                        )
+                        if speed <= 0.01:
                             if driving:
                                 stop_drive(mc, args.dry_run)
                                 driving = False
-                            command_text = f"centered err={error:+.2f} area={area:.0f}"
+                                state["driving"] = False
+                            command_text = f"locked err={error:+.2f} area={area:.0f}/{target_area:.0f}"
                         else:
-                            vy = -1.0 if error > 0 else 1.0
-                            speed = (abs(error) - args.deadzone) / (1.0 - args.deadzone) * args.max_strafe
-                            if args.dry_run:
-                                print(f"DRIVE vx=0.00 vy={vy:+.2f} trans_speed={speed:.2f} rot=0.00")
-                            else:
-                                mc.drive(0.0, vy, speed, 0.0)
+                            drive_vector(mc, args.dry_run, range_cmd, lateral_cmd, speed)
                             driving = True
                             state["driving"] = True
-                            command_text = f"err={error:+.2f} speed={speed:.2f} area={area:.0f}"
+                            command_text = (
+                                f"xerr={error:+.2f} aerr={area_error:+.2f} "
+                                f"vx={range_cmd:+.2f} vy={lateral_cmd:+.2f} spd={speed:.2f}"
+                            )
                         last_control = now
                 else:
-                    if driving:
-                        stop_drive(mc, args.dry_run)
-                        driving = False
-                        state["driving"] = False
-                    command_text = "OBJECT NOT SEEN"
+                    now = time.time()
+                    if (
+                        last_edge_vy
+                        and now - last_edge_time <= args.edge_reacquire_seconds
+                        and now - last_control >= interval
+                    ):
+                        speed = args.max_strafe * 0.45
+                        drive_vector(mc, args.dry_run, 0.0, last_edge_vy, speed)
+                        driving = True
+                        state["driving"] = True
+                        last_control = now
+                        command_text = f"EDGE LOST reacquire vy={last_edge_vy:+.2f}"
+                    else:
+                        if driving:
+                            stop_drive(mc, args.dry_run)
+                            driving = False
+                            state["driving"] = False
+                        command_text = "OBJECT NOT SEEN"
                     cv2.putText(frame, command_text, (10, 70), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 255), 2)
             else:
                 command_text = ""
@@ -367,12 +458,27 @@ def main():
                 if key in (ord("q"), 27):
                     break
                 if key == ord(" ") and picked_hsv:
+                    if target_area is None:
+                        target_area = pick_target_area(
+                            frame,
+                            picked_hsv,
+                            args.min_blob,
+                            args.h_tol,
+                            args.s_tol,
+                            args.v_tol,
+                        )
+                    if target_area:
+                        print(f"Tracking started. Desired area={target_area:.0f}")
+                    else:
+                        print("Tracking started. Desired area will set on first detection.")
                     tracking = True
-                    print("Tracking started.")
                 elif key == ord("r"):
                     tracking = False
                     picked_hsv = None
                     picked_rgb = None
+                    target_area = None
+                    last_edge_vy = 0.0
+                    last_edge_time = 0.0
                     if driving:
                         stop_drive(mc, args.dry_run)
                         driving = False
@@ -380,6 +486,8 @@ def main():
                     print("Re-pick target color.")
                 elif key == ord("s"):
                     tracking = False
+                    last_edge_vy = 0.0
+                    last_edge_time = 0.0
                     if driving:
                         stop_drive(mc, args.dry_run)
                         driving = False

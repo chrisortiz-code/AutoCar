@@ -141,16 +141,18 @@ class MecanumCAN:
             print(f"Motor shutdown warning: {e}")
 
         self._closed = True
-        self.bus = None
+        if self._listener_thread and self._listener_thread.is_alive():
+            self._listener_thread.join(timeout=2.0)
+        self._listener_thread = None
+
         try:
             bus.shutdown()
         except Exception as e:
             print(f"CAN shutdown warning: {e}")
 
-        if self._listener_thread and self._listener_thread.is_alive():
-            self._listener_thread.join(timeout=1.5)
-        self._listener_thread = None
+        self.bus = None
         self.armed.clear()
+        time.sleep(0.5)
         print("Done.")
 
     # ── Motor control ───────────────────────────────────────────────

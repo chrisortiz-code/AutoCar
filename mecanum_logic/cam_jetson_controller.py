@@ -33,11 +33,12 @@ from can_bus import MecanumCAN
 
 # Color matching. These are intentionally broad so more of the target object is
 # included in the detected contour instead of only the exact clicked shade.
-HSV_TOL_H = 60
-HSV_TOL_S = 160
-HSV_TOL_V = 160
-LOW_SAT_THRESHOLD = 80
-DARK_RGB_MARGIN = 95
+HSV_TOL_H = 35
+HSV_TOL_S = 90
+HSV_TOL_V = 90
+RGB_MARGIN = 45
+LOW_SAT_THRESHOLD = 70
+DARK_RGB_MARGIN = 55
 
 # Tracking and safety.
 DEADZONE = 0.10      # center 10% of frame means no sideways correction
@@ -57,6 +58,8 @@ DEFAULT_TARGET_RGB = (36, 89, 133)
 picked_hsv = None
 picked_rgb = None
 target_area = None
+target_hint_pos = None
+last_target_pos = None
 tracking = False
 click_pos = None
 
@@ -74,6 +77,7 @@ def parse_args():
     parser.add_argument("--h-tol", type=int, default=HSV_TOL_H, help="HSV hue tolerance")
     parser.add_argument("--s-tol", type=int, default=HSV_TOL_S, help="HSV saturation tolerance")
     parser.add_argument("--v-tol", type=int, default=HSV_TOL_V, help="HSV value tolerance")
+    parser.add_argument("--rgb-margin", type=int, default=RGB_MARGIN, help="RGB channel margin around the picked color")
     parser.add_argument("--low-sat-threshold", type=int, default=LOW_SAT_THRESHOLD, help="Ignore hue when picked saturation is below this")
     parser.add_argument("--dark-rgb-margin", type=int, default=DARK_RGB_MARGIN, help="RGB channel margin above a dark picked target")
     parser.add_argument("--min-blob", type=float, default=MIN_BLOB, help="Minimum contour area to accept target")
@@ -135,19 +139,27 @@ def sample_color(frame_bgr, x, y):
     return tuple(int(v) for v in avg_hsv), avg_rgb
 
 
-def color_mask(frame_bgr, hsv_center, rgb_center, h_tol, s_tol, v_tol, low_sat_threshold, dark_rgb_margin):
+def color_mask(frame_bgr, hsv_center, rgb_center, h_tol, s_tol, v_tol, rgb_margin, low_sat_threshold, dark_rgb_margin):
     hsv = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2HSV)
     h, s, v = hsv_center
+    r, g, b = rgb_center
 
     if s <= low_sat_threshold:
-        r, g, b = rgb_center
         upper_s = min(255, max(low_sat_threshold, s + s_tol))
+        if max(rgb_center) <= 85:
+            lower_bgr = np.array([0, 0, 0])
+        else:
+            lower_bgr = np.array([
+                max(0, b - rgb_margin),
+                max(0, g - rgb_margin),
+                max(0, r - rgb_margin),
+            ])
         upper_bgr = np.array([
             min(255, b + dark_rgb_margin),
             min(255, g + dark_rgb_margin),
             min(255, r + dark_rgb_margin),
         ])
-        mask_rgb = cv2.inRange(frame_bgr, np.array([0, 0, 0]), upper_bgr)
+        mask_rgb = cv2.inRange(frame_bgr, lower_bgr, upper_bgr)
         mask_low_sat = cv2.inRange(
             hsv,
             np.array([0, 0, 0]),
@@ -158,6 +170,18 @@ def color_mask(frame_bgr, hsv_center, rgb_center, h_tol, s_tol, v_tol, low_sat_t
         mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, kernel)
         mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, kernel, iterations=2)
         return mask
+
+    lower_bgr = np.array([
+        max(0, b - rgb_margin),
+        max(0, g - rgb_margin),
+        max(0, r - rgb_margin),
+    ])
+    upper_bgr = np.array([
+        min(255, b + rgb_margin),
+        min(255, g + rgb_margin),
+        min(255, r + rgb_margin),
+    ])
+    mask_rgb = cv2.inRange(frame_bgr, lower_bgr, upper_bgr)
 
     lower = np.array([max(0, h - h_tol), max(0, s - s_tol), max(0, v - v_tol)])
     upper = np.array([min(179, h + h_tol), min(255, s + s_tol), min(255, v + v_tol)])
@@ -181,34 +205,49 @@ def color_mask(frame_bgr, hsv_center, rgb_center, h_tol, s_tol, v_tol, low_sat_t
     else:
         mask = cv2.inRange(hsv, lower, upper)
 
+    mask = cv2.bitwise_and(mask, mask_rgb)
     kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (9, 9))
     mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, kernel)
     mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, kernel)
     return mask
 
 
-def find_target(frame_bgr, hsv_center, rgb_center, min_blob, h_tol, s_tol, v_tol, low_sat_threshold, dark_rgb_margin):
-    mask = color_mask(frame_bgr, hsv_center, rgb_center, h_tol, s_tol, v_tol, low_sat_threshold, dark_rgb_margin)
+def find_target(frame_bgr, hsv_center, rgb_center, min_blob, h_tol, s_tol, v_tol, rgb_margin, low_sat_threshold, dark_rgb_margin, hint_pos=None):
+    mask = color_mask(frame_bgr, hsv_center, rgb_center, h_tol, s_tol, v_tol, rgb_margin, low_sat_threshold, dark_rgb_margin)
     contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
     if not contours:
         return None, mask
 
-    biggest = max(contours, key=cv2.contourArea)
-    area = cv2.contourArea(biggest)
-    if area < min_blob:
+    candidates = []
+    for contour in contours:
+        area = cv2.contourArea(contour)
+        if area < min_blob:
+            continue
+        moments = cv2.moments(contour)
+        if moments["m00"] == 0:
+            continue
+        cx = int(moments["m10"] / moments["m00"])
+        cy = int(moments["m01"] / moments["m00"])
+        candidates.append({"x": cx, "y": cy, "area": area, "contour": contour})
+
+    if not candidates:
         return None, mask
 
-    moments = cv2.moments(biggest)
-    if moments["m00"] == 0:
-        return None, mask
+    if hint_pos:
+        hx, hy = hint_pos
+        containing = [
+            target for target in candidates
+            if cv2.pointPolygonTest(target["contour"], (float(hx), float(hy)), False) >= 0
+        ]
+        if containing:
+            return max(containing, key=lambda target: target["area"]), mask
+        return min(candidates, key=lambda target: (target["x"] - hx) ** 2 + (target["y"] - hy) ** 2), mask
 
-    cx = int(moments["m10"] / moments["m00"])
-    cy = int(moments["m01"] / moments["m00"])
-    return {"x": cx, "y": cy, "area": area, "contour": biggest}, mask
+    return max(candidates, key=lambda target: target["area"]), mask
 
 
-def pick_target_area(frame_bgr, hsv_center, rgb_center, min_blob, h_tol, s_tol, v_tol, low_sat_threshold, dark_rgb_margin):
-    target, _ = find_target(frame_bgr, hsv_center, rgb_center, min_blob, h_tol, s_tol, v_tol, low_sat_threshold, dark_rgb_margin)
+def pick_target_area(frame_bgr, hsv_center, rgb_center, min_blob, h_tol, s_tol, v_tol, rgb_margin, low_sat_threshold, dark_rgb_margin, hint_pos=None):
+    target, _ = find_target(frame_bgr, hsv_center, rgb_center, min_blob, h_tol, s_tol, v_tol, rgb_margin, low_sat_threshold, dark_rgb_margin, hint_pos)
     if target:
         return target["area"]
     return None
@@ -298,7 +337,7 @@ def maybe_print_motion_debug(args, last_debug, mode, **values):
 
 
 def main():
-    global picked_hsv, picked_rgb, target_area, tracking, click_pos
+    global picked_hsv, picked_rgb, target_area, target_hint_pos, last_target_pos, tracking, click_pos
 
     args = parse_args()
     state = {"mc": None, "cap": None, "driving": False, "cleaned": False}
@@ -414,8 +453,10 @@ def main():
                     args.h_tol,
                     args.s_tol,
                     args.v_tol,
+                    args.rgb_margin,
                     args.low_sat_threshold,
                     args.dark_rgb_margin,
+                    target_hint_pos,
                 )
                 if selected_target:
                     draw_target_highlight(frame, selected_target, (0, 255, 255), "selected")
@@ -425,6 +466,8 @@ def main():
                 click_pos = None
                 if 0 <= x < fw and 0 <= y < fh:
                     picked_hsv, picked_rgb = sample_color(frame, x, y)
+                    target_hint_pos = (x, y)
+                    last_target_pos = (x, y)
                     selected_target, _ = find_target(
                         frame,
                         picked_hsv,
@@ -433,8 +476,10 @@ def main():
                         args.h_tol,
                         args.s_tol,
                         args.v_tol,
+                        args.rgb_margin,
                         args.low_sat_threshold,
                         args.dark_rgb_margin,
+                        target_hint_pos,
                     )
                     target_area = selected_target["area"] if selected_target else None
                     tracking = False
@@ -459,13 +504,16 @@ def main():
                     args.h_tol,
                     args.s_tol,
                     args.v_tol,
+                    args.rgb_margin,
                     args.low_sat_threshold,
                     args.dark_rgb_margin,
+                    last_target_pos or target_hint_pos,
                 )
                 if target:
                     bx = target["x"]
                     by = target["y"]
                     area = target["area"]
+                    last_target_pos = (bx, by)
                     if target_area is None:
                         target_area = area
                         print(f"Target area set to {target_area:.0f}")
@@ -571,8 +619,10 @@ def main():
                             args.h_tol,
                             args.s_tol,
                             args.v_tol,
+                            args.rgb_margin,
                             args.low_sat_threshold,
                             args.dark_rgb_margin,
+                            target_hint_pos,
                         )
                     if target_area:
                         print(f"Tracking started. Desired area={target_area:.0f}")
@@ -584,6 +634,8 @@ def main():
                     picked_hsv = None
                     picked_rgb = None
                     target_area = None
+                    target_hint_pos = None
+                    last_target_pos = None
                     last_edge_vy = 0.0
                     last_edge_time = 0.0
                     last_debug = 0.0
@@ -594,6 +646,7 @@ def main():
                     print("Re-pick target color.")
                 elif key == ord("s"):
                     tracking = False
+                    last_target_pos = None
                     last_edge_vy = 0.0
                     last_edge_time = 0.0
                     last_debug = 0.0

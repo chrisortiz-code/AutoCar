@@ -246,7 +246,7 @@ def move_translate_rotate():
     data = request.json
     distance_cm = float(data.get("r", 0))
     theta_deg = float(data.get("theta", 0))
-    omega_deg = float(data.get("omega", 0))
+    omega_deg = -float(data.get("omega", 0))  # negate: GUI positive = CW, mecanum positive = CCW
     vel_pct = float(data.get("vel_pct", 30))
 
     # Pure rotation or pure translation → delegate to existing move_polar logic
@@ -284,7 +284,7 @@ def move_polar():
     distance_cm = float(data.get("r", 0))       # distance in cm
     magnitude = distance_cm * MOTOR_REVS_PER_CM  # convert to motor revolutions
     theta_deg = float(data.get("theta", 0))     # direction (0=forward, CW)
-    omega_deg = float(data.get("omega", 0))     # total rotation in degrees
+    omega_deg = -float(data.get("omega", 0))    # negate: GUI positive = CW, mecanum positive = CCW
     vel_pct   = float(data.get("vel_pct", 30))  # speed %
 
     if moving:

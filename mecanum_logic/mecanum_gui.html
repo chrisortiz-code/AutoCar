@@ -89,12 +89,12 @@
       <div class="slider-row">
         <span class="slider-label">theta (°)</span>
         <input type="range" id="theta" min="0" max="359" value="0" step="1" />
-        <input type="number" id="theta-n" min="0" max="359" value="0" step="1" />
+        <input type="number" id="theta-n" min="0" max="359" value="0" step="10" />
       </div>
       <div class="slider-row">
         <span class="slider-label">rotation</span>
         <input type="range" id="rot" min="-360" max="360" value="0" step="1" />
-        <input type="number" id="rot-n" min="-360" max="360" value="0" step="1" />
+        <input type="number" id="rot-n" min="-360" max="360" value="0" step="10" />
       </div>
       <div class="slider-row">
         <span class="slider-label">velocity %</span>
@@ -608,6 +608,9 @@ async function pollStatus() {
 document.getElementById('btn-send').addEventListener('click', sendCommand);
 document.getElementById('btn-stop').addEventListener('click', eStop);
 document.getElementById('btn-home').addEventListener('click', goHome);
+document.querySelectorAll('input[type="number"]').forEach(el => {
+  el.addEventListener('keydown', e => { if (e.key === 'Enter') sendCommand(); });
+});
 document.getElementById('btn-reset-pos').addEventListener('click', () => {
   worldX=0; worldY=0; worldAngle=0; trail=[];
   document.getElementById('coord-x').textContent='0.00';

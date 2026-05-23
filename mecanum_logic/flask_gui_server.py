@@ -67,18 +67,15 @@ def mecanum_speeds(vx, vy, omega):
 
 moving = False
 
-WHEEL_DIAMETER = 11.25     # cm (effective, accounting for compression)
+WHEEL_DIAMETER = 11.5      # cm (effective, accounting for compression)
 GEAR_RATIO = 16.0 / 90.0  # motor:wheel
-CM_PER_MOTOR_REV = GEAR_RATIO * math.pi * WHEEL_DIAMETER  # ~6.283 cm
-MOTOR_REVS_PER_CM = 1.0 / CM_PER_MOTOR_REV               # ~0.1592
+CM_PER_MOTOR_REV = GEAR_RATIO * math.pi * WHEEL_DIAMETER  # ~6.424 cm
+MOTOR_REVS_PER_CM = 1.0 / CM_PER_MOTOR_REV               # ~0.1557
 
-TURNS_PER_DEG = 0.073     # motor turns per degree of robot rotation — tune this
+TURNS_PER_DEG = 0.067     # motor turns per degree of robot rotation — tune this
 MOVE_TIMEOUT = 30         # seconds — safety timeout
 RAMP_PCT = 0.15           # ramp over first/last 15% of travel time
 RAMP_MIN = 0.1            # minimum ramp fraction (10% of peak)
-# Average velocity factor with ramp: cruise_frac*1.0 + ramp_frac*avg_ramp
-# = 0.70*1.0 + 0.30*0.55 = 0.865  →  divide T by this to compensate
-RAMP_COMPENSATION = 1.0 - 2*RAMP_PCT + 2*RAMP_PCT * (RAMP_MIN + 1.0) / 2  # ~0.865
 
 # ---------------------------------------------------------------------------
 #  TIME-BASED MOVE — sends per-wheel velocities via UDP
@@ -105,8 +102,8 @@ def _run_move(targets, vel_pct):
         moving = False
         return
 
-    # Total time for the move (compensate for ramp reducing average velocity)
-    T = max_travel / (vel_scale * RAMP_COMPENSATION)
+    # Total time for the move
+    T = max_travel / vel_scale
 
     # Peak velocity per wheel, scaled so all finish together.
     # ratio = targets[nid] / max_travel gives a signed value in [-1, 1].
@@ -170,9 +167,8 @@ def _run_translate_rotate(distance_cm, heading_deg, rotation_deg, vel_pct):
     # T must cover the worst-case wheel (translation + rotation in same direction).
     # The normalization step caps max wheel speed at v each tick, so we need
     # enough time for the busiest wheel to complete all its turns.
-    # Compensate for ramp reducing average velocity.
     max_wheel_travel = magnitude + rot_turns
-    T = max_wheel_travel / (v * RAMP_COMPENSATION)  # seconds
+    T = max_wheel_travel / v  # seconds
 
     # Rotation rate in motor-turns/s and rad/s
     omega_turns = rotation_deg * TURNS_PER_DEG / T  # signed

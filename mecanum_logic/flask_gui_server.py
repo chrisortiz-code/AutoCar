@@ -153,6 +153,10 @@ def _run_translate_rotate(distance_cm, heading_deg, rotation_deg, vel_pct):
 
     Uses a 50Hz velocity loop that continuously rotates the body-frame
     velocity vector to compensate for the robot's changing heading.
+
+    Translation and rotation are sent as independent speed components via
+    the D packet — mc.drive() normalizes them separately so they don't
+    steal speed budget from each other.
     """
     global moving
 
@@ -164,14 +168,20 @@ def _run_translate_rotate(distance_cm, heading_deg, rotation_deg, vel_pct):
         moving = False
         return
 
-    # T must cover the worst-case wheel (translation + rotation in same direction).
-    # The normalization step caps max wheel speed at v each tick, so we need
-    # enough time for the busiest wheel to complete all its turns.
-    max_wheel_travel = magnitude + rot_turns
-    T = max_wheel_travel / v  # seconds
+    # T = whichever component takes longer at speed v,
+    # but also ensure combined per-wheel speed stays within MAX_VEL
+    T = max(
+        magnitude / v if magnitude > 0.01 else 0,
+        rot_turns / v if rot_turns > 0.01 else 0,
+        (magnitude + rot_turns) / MAX_VEL,  # safety cap
+    )
+    if T < 0.01:
+        moving = False
+        return
 
-    # Rotation rate in motor-turns/s and rad/s
-    omega_turns = rotation_deg * TURNS_PER_DEG / T  # signed
+    # Rates so both finish at time T
+    trans_speed = magnitude / T   # turns/s for translation component
+    rot_speed = rotation_deg * TURNS_PER_DEG / T  # signed turns/s for rotation
     omega_rad_per_s = math.radians(rotation_deg) / T
 
     # World-frame velocity direction (fixed for entire move)
@@ -186,7 +196,8 @@ def _run_translate_rotate(distance_cm, heading_deg, rotation_deg, vel_pct):
     theta_accum = 0.0  # accumulated heading from actual ramped rotation
 
     print(f"\nTranslate+Rotate: {distance_cm:.0f}cm heading={heading_deg:.1f} "
-          f"rot={rotation_deg:.0f}deg vel={vel_pct}% T={T:.2f}s")
+          f"rot={rotation_deg:.0f}deg vel={vel_pct}% T={T:.2f}s "
+          f"trans_spd={trans_speed:.2f} rot_spd={rot_speed:.2f}")
 
     try:
         while True:
@@ -211,7 +222,6 @@ def _run_translate_rotate(distance_cm, heading_deg, rotation_deg, vel_pct):
                 ramp = 1.0
 
             # Accumulate heading from actual ramped rotation rate
-            # (not constant omega*t, which drifts during ramp phases)
             theta_accum += omega_rad_per_s * ramp * dt_actual
 
             # Rotate world velocity into body frame
@@ -220,18 +230,9 @@ def _run_translate_rotate(distance_cm, heading_deg, rotation_deg, vel_pct):
             vx_body = cos_t * vx_world + sin_t * vy_world
             vy_body = -sin_t * vx_world + cos_t * vy_world
 
-            # Compute raw mecanum wheel speeds (translation + rotation)
-            raw = mecanum_speeds(vx_body, vy_body, omega_turns)
-
-            # Normalize so the max wheel matches cruise speed
-            max_raw = max(abs(s) for s in raw.values())
-            if max_raw < 0.001:
-                scale = 0.0
-            else:
-                scale = v / max_raw
-
-            wheel_vels = {nid: raw[nid] * scale * ramp for nid in ALL_IDS}
-            _send_wheels(wheel_vels)
+            # Send D packet — drive() normalizes translation and rotation
+            # independently, so they don't compete for speed budget
+            _send_drive(vx_body, vy_body, trans_speed * ramp, rot_speed * ramp)
 
             time.sleep(dt)
     finally:

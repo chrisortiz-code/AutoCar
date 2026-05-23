@@ -55,10 +55,10 @@ def _send_estop():
 def mecanum_speeds(vx, vy, omega):
     """Returns {node_id: speed} based on each motor's role."""
     roles = {
-        "FL": vx - vy - omega,
-        "FR": vx + vy + omega,
-        "BL": vx + vy - omega,
-        "BR": vx - vy + omega,
+        "FL": vx - vy + omega,
+        "FR": vx + vy - omega,
+        "BL": vx + vy + omega,
+        "BR": vx - vy - omega,
     }
     return {nid: roles[m["role"]] for nid, m in MOTORS.items()}
 
@@ -76,6 +76,11 @@ TURNS_PER_DEG = 0.067     # motor turns per degree of robot rotation — tune th
 MOVE_TIMEOUT = 30         # seconds — safety timeout
 RAMP_PCT = 0.15           # ramp over first/last 15% of travel time
 RAMP_MIN = 0.1            # minimum ramp fraction (10% of peak)
+# Ramp reduces average velocity to ~86.5% of peak. TURNS_PER_DEG has this baked in
+# (tuned empirically), but MOTOR_REVS_PER_CM is from physical constants and needs
+# explicit compensation.
+_RAMP_AVG = 1.0 - 2*RAMP_PCT + 2*RAMP_PCT * (RAMP_MIN + 1.0) / 2  # ~0.865
+MOTOR_REVS_PER_CM_COMP = MOTOR_REVS_PER_CM / _RAMP_AVG  # ramp-compensated
 
 # ---------------------------------------------------------------------------
 #  TIME-BASED MOVE — sends per-wheel velocities via UDP
@@ -151,16 +156,14 @@ def _run_move(targets, vel_pct):
 def _run_translate_rotate(distance_cm, heading_deg, rotation_deg, vel_pct):
     """Drive a straight world-frame line while simultaneously rotating.
 
-    Uses a 50Hz velocity loop that continuously rotates the body-frame
-    velocity vector to compensate for the robot's changing heading.
-
-    Translation and rotation are sent as independent speed components via
-    the D packet — mc.drive() normalizes them separately so they don't
-    steal speed budget from each other.
+    Micro-step approach: each 50Hz tick computes translation and rotation
+    wheel velocities separately (so they don't steal speed from each other),
+    then combines them per-wheel. Heading compensation rotates the body-frame
+    translation vector to maintain a straight world-frame path.
     """
     global moving
 
-    magnitude = distance_cm * MOTOR_REVS_PER_CM  # total motor revs for translation
+    magnitude = distance_cm * MOTOR_REVS_PER_CM_COMP  # ramp-compensated motor revs
     rot_turns = abs(rotation_deg) * TURNS_PER_DEG  # total motor revs for rotation
     v = (vel_pct / 100.0) * MAX_VEL              # cruise speed in turns/s
 
@@ -168,36 +171,41 @@ def _run_translate_rotate(distance_cm, heading_deg, rotation_deg, vel_pct):
         moving = False
         return
 
-    # T = whichever component takes longer at speed v,
-    # but also ensure combined per-wheel speed stays within MAX_VEL
+    # T = whichever component takes longer at speed v
     T = max(
         magnitude / v if magnitude > 0.01 else 0,
         rot_turns / v if rot_turns > 0.01 else 0,
-        (magnitude + rot_turns) / MAX_VEL,  # safety cap
     )
     if T < 0.01:
         moving = False
         return
 
-    # Rates so both finish at time T
-    trans_speed = magnitude / T   # turns/s for translation component
-    rot_speed = rotation_deg * TURNS_PER_DEG / T  # signed turns/s for rotation
-    omega_rad_per_s = math.radians(rotation_deg) / T
+    # Rates so both finish at time T (each ≤ v)
+    trans_rate = magnitude / T   # turns/s for translation
+    rot_rate = rot_turns / T     # turns/s for rotation (unsigned)
+    rot_sign = 1.0 if rotation_deg >= 0 else -1.0
+
+    # Heading tracking: GUI positive = CW = negative in standard math
+    omega_rad_per_s = -math.radians(rotation_deg) / T
 
     # World-frame velocity direction (fixed for entire move)
     theta_world = math.radians(-heading_deg)
     vx_world = math.cos(theta_world)
     vy_world = math.sin(theta_world)
 
+    # Pre-compute rotation unit velocities (server formula: positive omega = CW)
+    rot_unit = mecanum_speeds(0, 0, rot_sign)
+    max_r = max(abs(s) for s in rot_unit.values()) or 1.0
+
     dt = 0.02  # 50 Hz
     start_time = time.time()
     prev_time = start_time
-    ramp_time = T * RAMP_PCT  # seconds for ramp-up / ramp-down
-    theta_accum = 0.0  # accumulated heading from actual ramped rotation
+    ramp_time = T * RAMP_PCT
+    theta_accum = 0.0
 
     print(f"\nTranslate+Rotate: {distance_cm:.0f}cm heading={heading_deg:.1f} "
           f"rot={rotation_deg:.0f}deg vel={vel_pct}% T={T:.2f}s "
-          f"trans_spd={trans_speed:.2f} rot_spd={rot_speed:.2f}")
+          f"trans={trans_rate:.2f} rot={rot_rate:.2f} t/s")
 
     try:
         while True:
@@ -212,7 +220,7 @@ def _run_translate_rotate(distance_cm, heading_deg, rotation_deg, vel_pct):
                 print("  TIMEOUT — stopping all")
                 break
 
-            # Time-based ramp (accel at start, decel at end)
+            # Time-based ramp
             remaining = T - elapsed
             if elapsed < ramp_time:
                 ramp = RAMP_MIN + (1.0 - RAMP_MIN) * (elapsed / ramp_time)
@@ -230,9 +238,17 @@ def _run_translate_rotate(distance_cm, heading_deg, rotation_deg, vel_pct):
             vx_body = cos_t * vx_world + sin_t * vy_world
             vy_body = -sin_t * vx_world + cos_t * vy_world
 
-            # Send D packet — drive() normalizes translation and rotation
-            # independently, so they don't compete for speed budget
-            _send_drive(vx_body, vy_body, trans_speed * ramp, rot_speed * ramp)
+            # Translation component (normalized independently)
+            trans_unit = mecanum_speeds(vx_body, vy_body, 0)
+            max_t = max(abs(s) for s in trans_unit.values()) or 1.0
+
+            # Combine: each component scaled to its own rate
+            wheel_vels = {
+                nid: (trans_unit[nid] / max_t) * trans_rate * ramp
+                   + (rot_unit[nid] / max_r) * rot_rate * ramp
+                for nid in ALL_IDS
+            }
+            _send_wheels(wheel_vels)
 
             time.sleep(dt)
     finally:
@@ -246,7 +262,7 @@ def move_translate_rotate():
     data = request.json
     distance_cm = float(data.get("r", 0))
     theta_deg = float(data.get("theta", 0))
-    omega_deg = -float(data.get("omega", 0))  # negate: GUI positive = CW, mecanum positive = CCW
+    omega_deg = float(data.get("omega", 0))
     vel_pct = float(data.get("vel_pct", 30))
 
     # Pure rotation or pure translation → delegate to existing move_polar logic
@@ -282,9 +298,9 @@ def move_polar():
     global moving
     data = request.json
     distance_cm = float(data.get("r", 0))       # distance in cm
-    magnitude = distance_cm * MOTOR_REVS_PER_CM  # convert to motor revolutions
+    magnitude = distance_cm * MOTOR_REVS_PER_CM_COMP  # ramp-compensated motor revs
     theta_deg = float(data.get("theta", 0))     # direction (0=forward, CW)
-    omega_deg = -float(data.get("omega", 0))    # negate: GUI positive = CW, mecanum positive = CCW
+    omega_deg = float(data.get("omega", 0))
     vel_pct   = float(data.get("vel_pct", 30))  # speed %
 
     if moving:

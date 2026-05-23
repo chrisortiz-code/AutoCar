@@ -67,14 +67,18 @@ def mecanum_speeds(vx, vy, omega):
 
 moving = False
 
-WHEEL_DIAMETER = 11.75     # cm
+WHEEL_DIAMETER = 11.25     # cm (effective, accounting for compression)
 GEAR_RATIO = 16.0 / 90.0  # motor:wheel
-CM_PER_MOTOR_REV = GEAR_RATIO * math.pi * WHEEL_DIAMETER  # ~6.562 cm
-MOTOR_REVS_PER_CM = 1.0 / CM_PER_MOTOR_REV               # ~0.1524
+CM_PER_MOTOR_REV = GEAR_RATIO * math.pi * WHEEL_DIAMETER  # ~6.283 cm
+MOTOR_REVS_PER_CM = 1.0 / CM_PER_MOTOR_REV               # ~0.1592
 
-TURNS_PER_DEG = 0.067     # motor turns per degree of robot rotation — tune this
+TURNS_PER_DEG = 0.073     # motor turns per degree of robot rotation — tune this
 MOVE_TIMEOUT = 30         # seconds — safety timeout
 RAMP_PCT = 0.15           # ramp over first/last 15% of travel time
+RAMP_MIN = 0.1            # minimum ramp fraction (10% of peak)
+# Average velocity factor with ramp: cruise_frac*1.0 + ramp_frac*avg_ramp
+# = 0.70*1.0 + 0.30*0.55 = 0.865  →  divide T by this to compensate
+RAMP_COMPENSATION = 1.0 - 2*RAMP_PCT + 2*RAMP_PCT * (RAMP_MIN + 1.0) / 2  # ~0.865
 
 # ---------------------------------------------------------------------------
 #  TIME-BASED MOVE — sends per-wheel velocities via UDP
@@ -101,8 +105,8 @@ def _run_move(targets, vel_pct):
         moving = False
         return
 
-    # Total time for the move
-    T = max_travel / vel_scale
+    # Total time for the move (compensate for ramp reducing average velocity)
+    T = max_travel / (vel_scale * RAMP_COMPENSATION)
 
     # Peak velocity per wheel, scaled so all finish together.
     # ratio = targets[nid] / max_travel gives a signed value in [-1, 1].
@@ -128,9 +132,9 @@ def _run_move(targets, vel_pct):
             # Time-based ramp
             remaining = T - elapsed
             if elapsed < ramp_time:
-                ramp = 0.1 + 0.9 * (elapsed / ramp_time)
+                ramp = RAMP_MIN + (1.0 - RAMP_MIN) * (elapsed / ramp_time)
             elif remaining < ramp_time:
-                ramp = 0.1 + 0.9 * (remaining / ramp_time)
+                ramp = RAMP_MIN + (1.0 - RAMP_MIN) * (remaining / ramp_time)
             else:
                 ramp = 1.0
 
@@ -166,8 +170,9 @@ def _run_translate_rotate(distance_cm, heading_deg, rotation_deg, vel_pct):
     # T must cover the worst-case wheel (translation + rotation in same direction).
     # The normalization step caps max wheel speed at v each tick, so we need
     # enough time for the busiest wheel to complete all its turns.
+    # Compensate for ramp reducing average velocity.
     max_wheel_travel = magnitude + rot_turns
-    T = max_wheel_travel / v  # seconds
+    T = max_wheel_travel / (v * RAMP_COMPENSATION)  # seconds
 
     # Rotation rate in motor-turns/s and rad/s
     omega_turns = rotation_deg * TURNS_PER_DEG / T  # signed
@@ -180,26 +185,42 @@ def _run_translate_rotate(distance_cm, heading_deg, rotation_deg, vel_pct):
 
     dt = 0.02  # 50 Hz
     start_time = time.time()
+    prev_time = start_time
     ramp_time = T * RAMP_PCT  # seconds for ramp-up / ramp-down
+    theta_accum = 0.0  # accumulated heading from actual ramped rotation
 
     print(f"\nTranslate+Rotate: {distance_cm:.0f}cm heading={heading_deg:.1f} "
           f"rot={rotation_deg:.0f}deg vel={vel_pct}% T={T:.2f}s")
 
     try:
         while True:
-            elapsed = time.time() - start_time
+            now = time.time()
+            elapsed = now - start_time
+            dt_actual = now - prev_time
+            prev_time = now
+
             if elapsed >= T:
                 break
             if elapsed > MOVE_TIMEOUT:
                 print("  TIMEOUT — stopping all")
                 break
 
-            # Current heading offset (open-loop)
-            theta_now = omega_rad_per_s * elapsed
+            # Time-based ramp (accel at start, decel at end)
+            remaining = T - elapsed
+            if elapsed < ramp_time:
+                ramp = RAMP_MIN + (1.0 - RAMP_MIN) * (elapsed / ramp_time)
+            elif remaining < ramp_time:
+                ramp = RAMP_MIN + (1.0 - RAMP_MIN) * (remaining / ramp_time)
+            else:
+                ramp = 1.0
+
+            # Accumulate heading from actual ramped rotation rate
+            # (not constant omega*t, which drifts during ramp phases)
+            theta_accum += omega_rad_per_s * ramp * dt_actual
 
             # Rotate world velocity into body frame
-            cos_t = math.cos(theta_now)
-            sin_t = math.sin(theta_now)
+            cos_t = math.cos(theta_accum)
+            sin_t = math.sin(theta_accum)
             vx_body = cos_t * vx_world + sin_t * vy_world
             vy_body = -sin_t * vx_world + cos_t * vy_world
 
@@ -212,15 +233,6 @@ def _run_translate_rotate(distance_cm, heading_deg, rotation_deg, vel_pct):
                 scale = 0.0
             else:
                 scale = v / max_raw
-
-            # Time-based ramp (accel at start, decel at end)
-            remaining = T - elapsed
-            if elapsed < ramp_time:
-                ramp = 0.1 + 0.9 * (elapsed / ramp_time)
-            elif remaining < ramp_time:
-                ramp = 0.1 + 0.9 * (remaining / ramp_time)
-            else:
-                ramp = 1.0
 
             wheel_vels = {nid: raw[nid] * scale * ramp for nid in ALL_IDS}
             _send_wheels(wheel_vels)

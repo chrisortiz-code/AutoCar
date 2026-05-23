@@ -156,14 +156,18 @@ def _run_translate_rotate(distance_cm, heading_deg, rotation_deg, vel_pct):
     global moving
 
     magnitude = distance_cm * MOTOR_REVS_PER_CM  # total motor revs for translation
+    rot_turns = abs(rotation_deg) * TURNS_PER_DEG  # total motor revs for rotation
     v = (vel_pct / 100.0) * MAX_VEL              # cruise speed in turns/s
 
     if v < 0.01:
         moving = False
         return
 
-    # Total time so translation and rotation finish together
-    T = magnitude / v  # seconds
+    # T must cover the worst-case wheel (translation + rotation in same direction).
+    # The normalization step caps max wheel speed at v each tick, so we need
+    # enough time for the busiest wheel to complete all its turns.
+    max_wheel_travel = magnitude + rot_turns
+    T = max_wheel_travel / v  # seconds
 
     # Rotation rate in motor-turns/s and rad/s
     omega_turns = rotation_deg * TURNS_PER_DEG / T  # signed
@@ -257,7 +261,9 @@ def move_translate_rotate():
 @app.route("/status")
 def get_status():
     return jsonify({
+        "connected": sorted(ALL_IDS),
         "moving": moving,
+        "position": 0.0,
         "motors": {nid: MOTORS[nid]["role"] for nid in ALL_IDS},
     })
 
@@ -271,6 +277,9 @@ def move_polar():
     theta_deg = float(data.get("theta", 0))     # direction (0=forward, CW)
     omega_deg = float(data.get("omega", 0))     # total rotation in degrees
     vel_pct   = float(data.get("vel_pct", 30))  # speed %
+
+    if moving:
+        return jsonify({"ok": False, "error": "already moving"})
 
     if magnitude <= 0 and abs(omega_deg) < 0.1:
         return jsonify({"ok": False, "error": "need magnitude or rotation"})

@@ -112,6 +112,13 @@
       <div class="panel-label">all wheels</div>
       <div class="wheel-bars" id="wheel-bars"></div>
 
+      <div style="display:flex;align-items:center;gap:8px;margin:10px 0;">
+        <label style="font-family:var(--mono);font-size:11px;color:var(--muted);display:flex;align-items:center;gap:6px;cursor:pointer;">
+          <input type="checkbox" id="chk-tr" style="accent-color:var(--blue);width:14px;height:14px;cursor:pointer;" />
+          translate+rotate mode
+        </label>
+        <span id="tr-hint" style="font-family:var(--mono);font-size:10px;color:var(--muted);margin-left:auto;"></span>
+      </div>
       <div class="btn-row">
         <button class="btn-send" id="btn-send">send to motor</button>
         <button class="btn-home" id="btn-home">home</button>
@@ -274,6 +281,16 @@ function update() {
       <span class="wheel-num">${w.val.toFixed(2)}</span>
     </div>`;
   }).join('');
+  // Update translate+rotate hint
+  const trHint = document.getElementById('tr-hint');
+  const hasBoth = d.r > 0.01 && Math.abs(d.omega) > 0.1;
+  if (document.getElementById('chk-tr').checked && hasBoth)
+    trHint.textContent = 'velocity loop active';
+  else if (document.getElementById('chk-tr').checked)
+    trHint.textContent = 'needs dist + rotation';
+  else
+    trHint.textContent = '';
+
   document.getElementById('code-out').innerHTML =
     `<span class="kw">odrv</span>.axis0.controller.config.vel_limit = <span class="num">${d.velLimit.toFixed(2)}</span>\n<span class="kw">move_by</span>(<span class="num">${d.fl.toFixed(3)}</span>, <span class="num">${d.vp}</span>)`;
 }
@@ -288,22 +305,25 @@ function startMotion(d) {
 
   trail.push({ x: worldX, y: worldY });
 
-  // Translation: 0=north, clockwise-increasing, robot-relative
-  const worldTheta = -Math.PI/2 + d.tDeg * Math.PI / 180 + worldAngle;
+  const useTR = document.getElementById('chk-tr').checked
+                && hasTranslation && hasRotation;
+
+  // Body-relative direction angle (for polar arc animation)
+  const bodyTheta = -Math.PI/2 + d.tDeg * Math.PI / 180;
   const totalDist = d.r;
+  const totalRot = d.omega * (Math.PI / 180);
+
+  // For T+R mode: pre-compute straight-line target (world-frame direction is fixed)
+  const worldTheta = bodyTheta + worldAngle;
   const targetX = worldX + Math.cos(worldTheta) * totalDist;
   const targetY = worldY + Math.sin(worldTheta) * totalDist;
 
-  // Rotation: omega is now degrees, convert to radians directly
-  const totalRot = d.omega * (Math.PI / 180);
-
-  // Animation speed: proportional to vel%, roughly 1 unit/s at 100%
   const animSpeed = Math.max(velFrac, 0.05);
 
   motion = {
     startX: worldX, startY: worldY, startAngle: worldAngle,
-    targetX, targetY, totalDist, totalRot,
-    frac: 0, animSpeed
+    targetX, targetY, totalDist, totalRot, bodyTheta,
+    frac: 0, prevFrac: 0, animSpeed, useTR
   };
 }
 
@@ -311,11 +331,24 @@ function simStep() {
   if (!motion) return;
   const dt = 0.05;
   const step = motion.animSpeed * dt * 1.2;
+  motion.prevFrac = motion.frac;
   motion.frac = Math.min(motion.frac + step, 1);
   const f = motion.frac;
+  const df = motion.frac - motion.prevFrac;
 
-  worldX     = motion.startX + (motion.targetX - motion.startX) * f;
-  worldY     = motion.startY + (motion.targetY - motion.startY) * f;
+  if (motion.useTR) {
+    // T+R mode: straight line, world-frame direction is fixed
+    worldX     = motion.startX + (motion.targetX - motion.startX) * f;
+    worldY     = motion.startY + (motion.targetY - motion.startY) * f;
+  } else {
+    // Polar mode: body-relative direction stays fixed, so world path curves
+    // Integrate position incrementally — direction rotates with heading
+    const curAngle = motion.startAngle + motion.totalRot * f;
+    const worldDir = motion.bodyTheta + curAngle;
+    const ds = motion.totalDist * df;
+    worldX += Math.cos(worldDir) * ds;
+    worldY += Math.sin(worldDir) * ds;
+  }
   worldAngle = motion.startAngle + motion.totalRot * f;
 
   trail.push({ x: worldX, y: worldY });
@@ -524,20 +557,23 @@ function log(msg, type='') {
 
 async function sendCommand() {
   const d = compute();
-  log(`r=${d.r.toFixed(2)} θ=${d.tDeg}° rot=${d.omega.toFixed(0)}° vel=${d.vp}%`);
+  const useTR = document.getElementById('chk-tr').checked
+                && d.r > 0.01 && Math.abs(d.omega) > 0.1;
+  const endpoint = useTR ? '/move_translate_rotate' : '/move_polar';
+  log(`r=${d.r.toFixed(2)} θ=${d.tDeg}° rot=${d.omega.toFixed(0)}° vel=${d.vp}% [${useTR ? 'T+R' : 'polar'}]`);
   startMotion(d);
   try {
-    const res = await fetch(`${API}/move_polar`, {
+    const res = await fetch(`${API}${endpoint}`, {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         r: d.r,
-        theta: d.tDeg + (worldAngle * 180 / Math.PI),  // rotate by current heading
+        theta: d.tDeg + (worldAngle * 180 / Math.PI),
         omega: d.omega,
         vel_pct: d.vp
       })
     });
     const data = await res.json();
-    if (data.ok) log(`FL=${data.fl} turns @ ${data.vel_limit} t/s`, 'ok');
+    if (data.ok) log(`ok — ${endpoint}`, 'ok');
     else log(data.error || 'error', 'err');
   } catch(e) {
     log('server unreachable — is server.py running?', 'err');

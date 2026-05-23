@@ -73,6 +73,21 @@ def main():
                 mc.arm_all()
                 print("Re-armed.\n")
 
+            elif cmd == "W":
+                # Per-wheel velocity: 4 floats in node-ID order (0,1,2,3)
+                vels = struct.unpack("<ffff", data[1:17])
+                for nid, vel in enumerate(vels):
+                    mc.set_vel(nid, vel)
+                if not driving:
+                    print(f"Driving per-wheel (from {addr[0]})")
+                driving = True
+
+                now = time.time()
+                if now - last_log >= LOG_INTERVAL:
+                    mc.request_all_iq()
+                    print(f"  {mc.status_line()}", end="\r")
+                    last_log = now
+
             elif cmd == "Q":
                 print("Quit received.")
                 break

@@ -67,7 +67,7 @@ def mecanum_speeds(vx, vy, omega):
 
 moving = False
 
-WHEEL_DIAMETER = 11.5      # cm (effective, accounting for compression)
+WHEEL_DIAMETER = 9.55      # cm (effective — tuned from measurement: 10cm cmd → 8.3cm actual)
 GEAR_RATIO = 16.0 / 90.0  # motor:wheel
 CM_PER_MOTOR_REV = GEAR_RATIO * math.pi * WHEEL_DIAMETER  # ~6.424 cm
 MOTOR_REVS_PER_CM = 1.0 / CM_PER_MOTOR_REV               # ~0.1557

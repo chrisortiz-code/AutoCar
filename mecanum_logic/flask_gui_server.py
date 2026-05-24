@@ -72,7 +72,8 @@ GEAR_RATIO = 16.0 / 90.0  # motor:wheel
 CM_PER_MOTOR_REV = GEAR_RATIO * math.pi * WHEEL_DIAMETER  # ~6.424 cm
 MOTOR_REVS_PER_CM = 1.0 / CM_PER_MOTOR_REV               # ~0.1557
 
-TURNS_PER_DEG = 0.072     # motor turns per degree of robot rotation — tune this
+TURNS_PER_DEG = 0.072
+# motor turns per degree of robot rotation — tune this
 MOVE_TIMEOUT = 30         # seconds — safety timeout
 RAMP_PCT = 0.15           # ramp over first/last 15% of travel time
 RAMP_MIN = 0.1            # minimum ramp fraction (10% of peak)

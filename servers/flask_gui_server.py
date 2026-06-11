@@ -1,10 +1,14 @@
 import math
+import os
 import time
 import struct
 import socket
 import threading
-from flask import Flask, request, jsonify
+from dotenv import load_dotenv
+from flask import Flask, request, jsonify, send_file
 from flask_cors import CORS
+
+load_dotenv(os.path.join(os.path.dirname(__file__), '..', '.env'))
 
 app = Flask(__name__)
 CORS(app)
@@ -22,8 +26,10 @@ ALL_IDS = list(MOTORS.keys())
 MAX_VEL = 10.0
 
 # ── UDP sender to universal_receiver.py ──────────────────────────────
-UDP_HOST = "127.0.0.1"
-UDP_PORT = 5555
+UDP_HOST = os.getenv("ROBOT_IP", "127.0.0.1")
+UDP_PORT = int(os.getenv("UDP_PORT", "5555"))
+# NOTE: When running on the Jetson, ROBOT_IP can stay as 127.0.0.1 (default).
+# Set ROBOT_IP in .env only when running this server on a remote PC.
 _udp_sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
 _udp_dest = (UDP_HOST, UDP_PORT)
 
@@ -282,6 +288,11 @@ def move_translate_rotate():
 
     return jsonify({"ok": True, "mode": "translate_rotate",
                     "distance_cm": distance_cm, "rotation_deg": omega_deg})
+
+
+@app.route("/")
+def index():
+    return send_file(os.path.join(os.path.dirname(__file__), "..", "gui", "mecanum_gui.html"))
 
 
 @app.route("/status")

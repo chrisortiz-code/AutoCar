@@ -2,7 +2,11 @@
   "permissions": {
     "allow": [
       "Bash(python:*)",
-      "Bash(git mv:*)"
+      "Bash(git mv:*)",
+      "Bash(xxd:*)",
+      "Bash(\"C:\\\\Users\\\\Chris\\\\AutoCar\\\\README.md\":*)",
+      "Bash(mkdir:*)",
+      "Bash(mv:*)"
     ]
   }
 }

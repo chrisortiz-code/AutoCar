@@ -3,19 +3,23 @@ PS4 Controller → UDP sender (runs on PC)
 Reads controller input, sends drive commands to Jetson over UDP.
 
 Usage:  python ps4_sender.py [JETSON_IP]
-        Default IP: 192.168.2.83
+        Uses ROBOT_IP from .env, or 192.168.2.83 as fallback.
 """
 
 import math
+import os
 import struct
 import sys
 import time
 
+from dotenv import load_dotenv
 import pygame
 
+load_dotenv(os.path.join(os.path.dirname(__file__), '..', '.env'))
+
 # ── Network config ──────────────────────────────────────────────────
-JETSON_IP   = sys.argv[1] if len(sys.argv) > 1 else "192.168.2.83"
-JETSON_PORT = 5555
+JETSON_IP   = sys.argv[1] if len(sys.argv) > 1 else os.getenv("ROBOT_IP", "192.168.2.83")
+JETSON_PORT = int(os.getenv("UDP_PORT", "5555"))
 
 # ── Tuning ──────────────────────────────────────────────────────────
 DEADZONE   = 0.12

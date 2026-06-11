@@ -22,14 +22,18 @@ blob's centroid and apparent area match the picked target.
 
 import argparse
 import atexit
+import os
 import platform
 import signal
 import socket
 import struct
 import time
 
+from dotenv import load_dotenv
 import cv2
 import numpy as np
+
+load_dotenv(os.path.join(os.path.dirname(__file__), '..', '.env'))
 
 
 
@@ -55,8 +59,8 @@ CONTROL_HZ = 20
 MOTION_DEBUG_INTERVAL = 0.5
 SAMPLE_SIZE = 5
 DEFAULT_TARGET_RGB = (36, 89, 133)
-DEFAULT_UDP_HOST = "127.0.0.1"
-DEFAULT_UDP_PORT = 5555
+DEFAULT_UDP_HOST = os.getenv("ROBOT_IP", "127.0.0.1")
+DEFAULT_UDP_PORT = int(os.getenv("UDP_PORT", "5555"))
 
 
 picked_hsv = None

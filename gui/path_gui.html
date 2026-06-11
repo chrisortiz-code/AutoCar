@@ -1,0 +1,764 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+<title>Path Controller</title>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@300;400;500&display=swap');
+  :root {
+    --bg: #0e0e0f; --surface: #161618; --surface2: #1e1e21;
+    --border: rgba(255,255,255,0.07); --border2: rgba(255,255,255,0.13);
+    --text: #e8e8e6; --muted: #6b6b68;
+    --blue: #4d9ef7; --blue-dim: rgba(77,158,247,0.15);
+    --orange: #f07d3a; --orange-dim: rgba(240,125,58,0.15);
+    --green: #3ecf7a; --green-dim: rgba(62,207,122,0.12);
+    --red: #f25f5c; --red-dim: rgba(242,95,92,0.15);
+    --mono: 'IBM Plex Mono', monospace; --sans: 'IBM Plex Sans', sans-serif;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { background: var(--bg); color: var(--text); font-family: var(--sans); font-size: 14px; min-height: 100vh; padding: 24px; }
+  header { display: flex; align-items: baseline; gap: 16px; margin-bottom: 24px; border-bottom: 0.5px solid var(--border); padding-bottom: 16px; }
+  header h1 { font-size: 15px; font-weight: 500; font-family: var(--mono); letter-spacing: 0.02em; }
+  .status-pill { font-family: var(--mono); font-size: 11px; padding: 3px 10px; border-radius: 20px; border: 0.5px solid var(--border2); color: var(--muted); }
+  .status-pill.idle { border-color: var(--green); color: var(--green); background: var(--green-dim); }
+  .status-pill.executing { border-color: var(--blue); color: var(--blue); background: var(--blue-dim); }
+  .status-pill.recording { border-color: var(--red); color: var(--red); background: var(--red-dim); }
+  .layout { display: grid; grid-template-columns: 380px 1fr; gap: 16px; align-items: start; }
+  .panel { background: var(--surface); border: 0.5px solid var(--border); border-radius: 10px; padding: 16px; margin-bottom: 12px; }
+  .panel-label { font-family: var(--mono); font-size: 10px; color: var(--muted); letter-spacing: 0.1em; text-transform: uppercase; margin-bottom: 14px; }
+  button { padding: 9px 14px; border-radius: 7px; border: 0.5px solid var(--border2); background: transparent; color: var(--text); font-family: var(--mono); font-size: 12px; cursor: pointer; transition: background 0.12s; }
+  button:hover { background: var(--surface2); }
+  button.btn-blue { border-color: var(--blue); color: var(--blue); background: var(--blue-dim); }
+  button.btn-blue:hover { background: rgba(77,158,247,0.25); }
+  button.btn-green { border-color: var(--green); color: var(--green); background: var(--green-dim); }
+  button.btn-red { border-color: var(--red); color: var(--red); background: var(--red-dim); }
+  button.btn-orange { border-color: var(--orange); color: var(--orange); background: var(--orange-dim); }
+  button:disabled { opacity: 0.35; cursor: default; }
+  .btn-row { display: flex; gap: 8px; margin-top: 10px; }
+  .btn-row button { flex: 1; }
+
+  /* Path list */
+  .path-item { display: flex; align-items: center; gap: 10px; padding: 8px 10px; border-radius: 7px; cursor: pointer; border: 0.5px solid transparent; transition: background 0.1s; }
+  .path-item:hover { background: var(--surface2); }
+  .path-item.selected { border-color: var(--blue); background: var(--blue-dim); }
+  .path-item .pi-name { font-family: var(--mono); font-size: 12px; flex: 1; }
+  .path-item .pi-type { font-family: var(--mono); font-size: 10px; color: var(--muted); padding: 2px 6px; border-radius: 4px; background: var(--surface2); }
+  .path-item .pi-date { font-family: var(--mono); font-size: 10px; color: var(--muted); }
+  .path-item .pi-del { font-size: 14px; color: var(--muted); cursor: pointer; padding: 2px 6px; border-radius: 4px; }
+  .path-item .pi-del:hover { color: var(--red); background: var(--red-dim); }
+
+  /* Step editor table */
+  .step-table { width: 100%; border-collapse: collapse; font-family: var(--mono); font-size: 11px; }
+  .step-table th { color: var(--muted); font-weight: 400; text-align: left; padding: 4px 6px; font-size: 10px; text-transform: uppercase; letter-spacing: 0.05em; border-bottom: 0.5px solid var(--border); }
+  .step-table td { padding: 4px 4px; }
+  .step-table input[type=number] { width: 58px; padding: 4px 5px; background: var(--surface2); border: 0.5px solid var(--border2); border-radius: 5px; color: var(--text); font-family: var(--mono); font-size: 11px; outline: none; -moz-appearance: textfield; }
+  .step-table input[type=number]::-webkit-inner-spin-button, .step-table input[type=number]::-webkit-outer-spin-button { -webkit-appearance: none; }
+  .step-table input[type=number]:focus { border-color: var(--blue); }
+  .step-table .row-del { color: var(--muted); cursor: pointer; font-size: 13px; }
+  .step-table .row-del:hover { color: var(--red); }
+
+  /* Slider */
+  input[type=range] { -webkit-appearance: none; height: 2px; background: var(--border2); border-radius: 2px; outline: none; }
+  input[type=range]::-webkit-slider-thumb { -webkit-appearance: none; width: 14px; height: 14px; border-radius: 50%; background: var(--blue); cursor: pointer; }
+  .slider-row { display: flex; align-items: center; gap: 8px; margin-bottom: 10px; }
+  .slider-label { font-family: var(--mono); font-size: 11px; color: var(--muted); min-width: 110px; }
+  .slider-val { font-family: var(--mono); font-size: 11px; color: var(--text); min-width: 40px; text-align: right; }
+
+  /* Visualization */
+  canvas { display: block; width: 100%; }
+  .right-col { display: flex; flex-direction: column; gap: 16px; }
+  .field-wrap { background: var(--surface); border: 0.5px solid var(--border); border-radius: 10px; padding: 16px; }
+
+  /* Recording indicator */
+  .rec-indicator { display: none; align-items: center; gap: 10px; padding: 12px 16px; border-radius: 10px; background: var(--red-dim); border: 0.5px solid var(--red); margin-bottom: 12px; }
+  .rec-indicator.active { display: flex; }
+  .rec-dot { width: 10px; height: 10px; border-radius: 50%; background: var(--red); animation: blink 1s infinite; }
+  @keyframes blink { 0%,100% { opacity: 1; } 50% { opacity: 0.3; } }
+  .rec-text { font-family: var(--mono); font-size: 12px; color: var(--red); }
+  .rec-count { font-family: var(--mono); font-size: 12px; color: var(--text); margin-left: auto; }
+
+  /* Log */
+  .log-panel { background: var(--surface); border: 0.5px solid var(--border); border-radius: 10px; padding: 16px; max-height: 140px; overflow-y: auto; }
+  .log-entry { font-family: var(--mono); font-size: 11px; line-height: 1.7; border-bottom: 0.5px solid var(--border); padding: 3px 0; }
+  .log-entry .ts { color: var(--muted); margin-right: 8px; }
+  .log-entry .msg { color: var(--text); }
+  .log-entry.err .msg { color: var(--red); }
+  .log-entry.ok .msg { color: var(--green); }
+
+  /* Charts area */
+  .chart-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+  .chart-wrap { background: var(--surface2); border: 0.5px solid var(--border); border-radius: 8px; padding: 10px; }
+  .chart-title { font-family: var(--mono); font-size: 10px; color: var(--muted); margin-bottom: 6px; text-transform: uppercase; letter-spacing: 0.05em; }
+</style>
+</head>
+<body>
+
+<header>
+  <h1>path_controller</h1>
+  <span class="status-pill" id="status-pill">connecting...</span>
+  <span style="font-family:var(--mono);font-size:11px;color:var(--muted);margin-left:auto;">
+    <a id="mecanum-link" href="#" style="color:var(--muted);" target="_blank">mecanum gui</a>
+  </span>
+</header>
+
+<div class="layout">
+  <!-- LEFT PANEL -->
+  <div>
+    <!-- Recording indicator -->
+    <div class="rec-indicator" id="rec-indicator">
+      <div class="rec-dot"></div>
+      <span class="rec-text">Recording...</span>
+      <span class="rec-count" id="rec-count">0 samples</span>
+    </div>
+
+    <!-- Path list -->
+    <div class="panel">
+      <div class="panel-label">saved paths</div>
+      <div id="path-list" style="max-height:200px;overflow-y:auto;margin-bottom:10px;"></div>
+      <div class="btn-row">
+        <button class="btn-blue" onclick="newPath('sequential')">+ sequential</button>
+        <button class="btn-orange" onclick="startRecording()">+ record</button>
+      </div>
+    </div>
+
+    <!-- Step editor (sequential) -->
+    <div class="panel" id="step-panel" style="display:none;">
+      <div class="panel-label">step editor — <span id="edit-path-name"></span></div>
+      <div style="overflow-x:auto;">
+        <table class="step-table" id="step-table">
+          <thead>
+            <tr><th>#</th><th>dist cm</th><th>heading</th><th>rotation</th><th>vel %</th><th>delay ms</th><th></th></tr>
+          </thead>
+          <tbody id="step-body"></tbody>
+        </table>
+      </div>
+      <div class="btn-row">
+        <button onclick="addStepRow()">+ step</button>
+        <button class="btn-blue" onclick="saveSteps()">save</button>
+        <button class="btn-green" onclick="executePath()">execute</button>
+        <button class="btn-red" onclick="stopExecution()">stop</button>
+      </div>
+    </div>
+
+    <!-- Continuous info panel -->
+    <div class="panel" id="cont-panel" style="display:none;">
+      <div class="panel-label">continuous path — <span id="cont-path-name"></span></div>
+      <div style="font-family:var(--mono);font-size:11px;color:var(--muted);line-height:2;">
+        samples: <span id="cont-samples" style="color:var(--text);">—</span><br>
+        duration: <span id="cont-duration" style="color:var(--text);">—</span><br>
+        sample rate: <span id="cont-rate" style="color:var(--text);">—</span><br>
+        coefficients: <span id="cont-coeffs" style="color:var(--text);">—</span>
+      </div>
+      <div class="slider-row" style="margin-top:12px;">
+        <span class="slider-label">FFT coefficients</span>
+        <input type="range" id="fft-slider" min="5" max="200" value="50" style="flex:1;" />
+        <span class="slider-val" id="fft-val">50</span>
+      </div>
+      <div class="btn-row">
+        <button class="btn-blue" onclick="previewContinuous()">preview</button>
+        <button class="btn-green" onclick="executePath()">execute</button>
+        <button class="btn-red" onclick="stopExecution()">stop</button>
+      </div>
+    </div>
+
+    <!-- Recording controls -->
+    <div class="panel" id="rec-panel" style="display:none;">
+      <div class="panel-label">recording controls</div>
+      <div style="font-family:var(--mono);font-size:11px;color:var(--muted);line-height:2;">
+        Drive using PS4 or the
+        <a id="mecanum-link-2" href="#" style="color:var(--blue);" target="_blank">mecanum GUI</a>,
+        then samples will be captured here.
+      </div>
+      <div class="slider-row" style="margin-top:10px;">
+        <span class="slider-label">sample rate (Hz)</span>
+        <input type="range" id="rec-rate" min="5" max="50" value="20" style="flex:1;" />
+        <span class="slider-val" id="rec-rate-val">20</span>
+      </div>
+      <div class="slider-row">
+        <span class="slider-label">FFT coefficients</span>
+        <input type="range" id="rec-coeffs" min="5" max="200" value="50" style="flex:1;" />
+        <span class="slider-val" id="rec-coeffs-val">50</span>
+      </div>
+      <div class="btn-row">
+        <button class="btn-red" onclick="stopRecording()">stop & save</button>
+        <button onclick="cancelRecording()">cancel</button>
+      </div>
+    </div>
+
+    <!-- Log -->
+    <div class="log-panel" id="log">
+      <div class="log-entry"><span class="ts">--:--:--</span><span class="msg">path controller ready</span></div>
+    </div>
+  </div>
+
+  <!-- RIGHT PANEL -->
+  <div class="right-col">
+    <!-- Path visualization -->
+    <div class="field-wrap">
+      <div class="panel-label">path visualization</div>
+      <canvas id="path-canvas" height="360"></canvas>
+    </div>
+
+    <!-- FFT charts -->
+    <div class="field-wrap" id="chart-section" style="display:none;">
+      <div class="panel-label">signal reconstruction</div>
+      <div class="chart-grid">
+        <div class="chart-wrap"><div class="chart-title">vx</div><canvas id="chart-vx" height="120"></canvas></div>
+        <div class="chart-wrap"><div class="chart-title">vy</div><canvas id="chart-vy" height="120"></canvas></div>
+        <div class="chart-wrap"><div class="chart-title">trans speed</div><canvas id="chart-ts" height="120"></canvas></div>
+        <div class="chart-wrap"><div class="chart-title">rot speed</div><canvas id="chart-rs" height="120"></canvas></div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+const API = location.origin;
+const MECANUM_GUI_URL = `${location.protocol}//${location.hostname}:5000`;
+document.querySelectorAll('#mecanum-link, #mecanum-link-2').forEach(a => a.href = MECANUM_GUI_URL);
+const CELL = 6; // pixels per cm for path viz
+
+let selectedPathId = null;
+let selectedPath = null;
+let paths = [];
+let recording = false;
+let recInterval = null;
+let previewData = null;
+
+// ── Logging ─────────────────────────────────────────────────────────
+function log(msg, type = '') {
+  const el = document.getElementById('log');
+  const ts = new Date().toTimeString().slice(0, 8);
+  const div = document.createElement('div');
+  div.className = 'log-entry ' + type;
+  div.innerHTML = `<span class="ts">${ts}</span><span class="msg">${msg}</span>`;
+  el.prepend(div);
+  while (el.children.length > 40) el.removeChild(el.lastChild);
+}
+
+// ── API helpers ─────────────────────────────────────────────────────
+async function api(path, opts = {}) {
+  try {
+    const res = await fetch(`${API}${path}`, {
+      headers: { 'Content-Type': 'application/json' },
+      ...opts,
+      body: opts.body ? JSON.stringify(opts.body) : undefined,
+    });
+    return await res.json();
+  } catch (e) {
+    log('server unreachable', 'err');
+    return null;
+  }
+}
+
+// ── Path list ───────────────────────────────────────────────────────
+async function refreshPaths() {
+  const data = await api('/paths');
+  if (!data) return;
+  paths = data;
+  const el = document.getElementById('path-list');
+  if (paths.length === 0) {
+    el.innerHTML = '<div style="font-family:var(--mono);font-size:11px;color:var(--muted);padding:8px;">no paths saved</div>';
+    return;
+  }
+  el.innerHTML = paths.map(p => `
+    <div class="path-item${p.id === selectedPathId ? ' selected' : ''}" onclick="selectPath(${p.id})">
+      <span class="pi-name">${esc(p.name)}</span>
+      <span class="pi-type">${p.path_type}</span>
+      <span class="pi-date">${p.created_at ? p.created_at.slice(5, 16) : ''}</span>
+      <span class="pi-del" onclick="event.stopPropagation();deletePath(${p.id})">x</span>
+    </div>
+  `).join('');
+}
+
+function esc(s) { const d = document.createElement('div'); d.textContent = s; return d.innerHTML; }
+
+async function selectPath(id) {
+  selectedPathId = id;
+  const data = await api(`/paths/${id}`);
+  if (!data || data.ok === false) return;
+  selectedPath = data;
+  refreshPaths();
+
+  document.getElementById('chart-section').style.display = 'none';
+  previewData = null;
+
+  if (data.path_type === 'sequential') {
+    document.getElementById('step-panel').style.display = '';
+    document.getElementById('cont-panel').style.display = 'none';
+    document.getElementById('edit-path-name').textContent = data.name;
+    renderSteps(data.steps || []);
+  } else {
+    document.getElementById('step-panel').style.display = 'none';
+    document.getElementById('cont-panel').style.display = '';
+    document.getElementById('cont-path-name').textContent = data.name;
+    const c = data.continuous;
+    if (c) {
+      document.getElementById('cont-samples').textContent = c.num_samples;
+      document.getElementById('cont-duration').textContent = c.duration_s.toFixed(1) + 's';
+      document.getElementById('cont-rate').textContent = c.sample_rate + ' Hz';
+      document.getElementById('cont-coeffs').textContent = c.num_coefficients;
+      document.getElementById('fft-slider').value = c.num_coefficients;
+      document.getElementById('fft-val').textContent = c.num_coefficients;
+    }
+  }
+  drawPathViz();
+}
+
+async function deletePath(id) {
+  await api(`/paths/${id}`, { method: 'DELETE' });
+  if (selectedPathId === id) {
+    selectedPathId = null;
+    selectedPath = null;
+    document.getElementById('step-panel').style.display = 'none';
+    document.getElementById('cont-panel').style.display = 'none';
+    document.getElementById('chart-section').style.display = 'none';
+  }
+  log(`deleted path #${id}`);
+  refreshPaths();
+  drawPathViz();
+}
+
+// ── New path ────────────────────────────────────────────────────────
+async function newPath(type) {
+  const name = prompt('Path name:', `Path ${paths.length + 1}`);
+  if (!name) return;
+  const res = await api('/paths', { method: 'POST', body: { name, path_type: type } });
+  if (res && res.ok) {
+    log(`created ${type} path "${name}"`, 'ok');
+    await refreshPaths();
+    selectPath(res.id);
+  }
+}
+
+// ── Step editor ─────────────────────────────────────────────────────
+function renderSteps(steps) {
+  const body = document.getElementById('step-body');
+  body.innerHTML = '';
+  steps.forEach((s, i) => {
+    const tr = document.createElement('tr');
+    tr.innerHTML = `
+      <td style="color:var(--muted);">${i + 1}</td>
+      <td><input type="number" value="${s.distance_cm || 0}" data-field="distance_cm" step="5" /></td>
+      <td><input type="number" value="${s.theta_deg || 0}" data-field="theta_deg" step="10" /></td>
+      <td><input type="number" value="${s.rotation_deg || 0}" data-field="rotation_deg" step="10" /></td>
+      <td><input type="number" value="${s.vel_pct || 30}" data-field="vel_pct" step="5" /></td>
+      <td><input type="number" value="${s.delay_ms || 0}" data-field="delay_ms" step="100" /></td>
+      <td><span class="row-del" onclick="this.closest('tr').remove();drawPathViz();">x</span></td>
+    `;
+    body.appendChild(tr);
+  });
+  // Update viz when inputs change
+  body.querySelectorAll('input').forEach(inp => {
+    inp.addEventListener('input', () => drawPathViz());
+  });
+}
+
+function addStepRow() {
+  const steps = collectSteps();
+  steps.push({ distance_cm: 20, theta_deg: 0, rotation_deg: 0, vel_pct: 30, delay_ms: 0 });
+  renderSteps(steps);
+  drawPathViz();
+}
+
+function collectSteps() {
+  const rows = document.querySelectorAll('#step-body tr');
+  return Array.from(rows).map(tr => {
+    const obj = {};
+    tr.querySelectorAll('input').forEach(inp => {
+      obj[inp.dataset.field] = parseFloat(inp.value) || 0;
+    });
+    return obj;
+  });
+}
+
+async function saveSteps() {
+  if (!selectedPathId) return;
+  const steps = collectSteps();
+  const res = await api(`/paths/${selectedPathId}/steps`, { method: 'POST', body: steps });
+  if (res && res.ok) log('steps saved', 'ok');
+  else log('failed to save steps', 'err');
+}
+
+// ── Execute / Stop ──────────────────────────────────────────────────
+async function executePath() {
+  if (!selectedPathId) return;
+  await saveSteps().catch(() => {});
+  const res = await api(`/paths/${selectedPathId}/execute`, { method: 'POST' });
+  if (res && res.ok) log(`executing path #${selectedPathId}`, 'ok');
+  else log(res?.error || 'execution failed', 'err');
+}
+
+async function stopExecution() {
+  await api('/stop', { method: 'POST' });
+  log('stopped', 'err');
+}
+
+// ── Recording ───────────────────────────────────────────────────────
+async function startRecording() {
+  const name = prompt('Recording name:', `Recording ${paths.length + 1}`);
+  if (!name) return;
+  const rate = parseInt(document.getElementById('rec-rate').value) || 20;
+  const res = await api('/record/start', { method: 'POST', body: { name, sample_rate: rate } });
+  if (!res || !res.ok) { log('failed to start recording', 'err'); return; }
+
+  recording = true;
+  selectedPathId = res.path_id;
+  document.getElementById('rec-indicator').classList.add('active');
+  document.getElementById('rec-panel').style.display = '';
+  document.getElementById('step-panel').style.display = 'none';
+  document.getElementById('cont-panel').style.display = 'none';
+  log(`recording started (path #${res.path_id})`, 'ok');
+
+  // Poll sample count
+  recInterval = setInterval(async () => {
+    const st = await api('/record/status');
+    if (st && st.recording) {
+      document.getElementById('rec-count').textContent = st.samples + ' samples';
+    }
+  }, 500);
+}
+
+async function stopRecording() {
+  if (!recording) return;
+  clearInterval(recInterval);
+  const coeffs = parseInt(document.getElementById('rec-coeffs').value) || 50;
+  const res = await api('/record/stop', { method: 'POST', body: { num_coefficients: coeffs } });
+  recording = false;
+  document.getElementById('rec-indicator').classList.remove('active');
+  document.getElementById('rec-panel').style.display = 'none';
+
+  if (res && res.ok) {
+    log(`recording saved: ${res.num_samples} samples, ${res.duration_s.toFixed(1)}s`, 'ok');
+    await refreshPaths();
+    selectPath(res.path_id);
+  } else {
+    log(res?.error || 'recording failed', 'err');
+  }
+}
+
+async function cancelRecording() {
+  if (!recording) return;
+  clearInterval(recInterval);
+  await api('/record/stop', { method: 'POST', body: { num_coefficients: 50 } }).catch(() => {});
+  recording = false;
+  document.getElementById('rec-indicator').classList.remove('active');
+  document.getElementById('rec-panel').style.display = 'none';
+  // Delete the partial path
+  if (selectedPathId) {
+    await api(`/paths/${selectedPathId}`, { method: 'DELETE' });
+    selectedPathId = null;
+  }
+  log('recording cancelled');
+  refreshPaths();
+}
+
+// ── FFT Preview ─────────────────────────────────────────────────────
+async function previewContinuous() {
+  if (!selectedPathId) return;
+  const n = parseInt(document.getElementById('fft-slider').value) || 50;
+  log(`loading preview (N=${n})...`);
+  const data = await api(`/paths/${selectedPathId}/preview?num_coefficients=${n}`);
+  if (!data || data.ok === false) { log('preview failed', 'err'); return; }
+  previewData = data;
+  document.getElementById('chart-section').style.display = '';
+  document.getElementById('cont-coeffs').textContent = n;
+  drawCharts();
+  log(`preview loaded: ${data.num_samples} samples`, 'ok');
+}
+
+function drawCharts() {
+  if (!previewData) return;
+  drawChart('chart-vx', previewData.vx, '#4d9ef7');
+  drawChart('chart-vy', previewData.vy, '#f07d3a');
+  drawChart('chart-ts', previewData.trans_speed, '#3ecf7a');
+  drawChart('chart-rs', previewData.rot_speed, '#f25f5c');
+}
+
+function drawChart(canvasId, data, color) {
+  const c = document.getElementById(canvasId);
+  const W = c.offsetWidth || 300;
+  c.width = W;
+  const H = c.height;
+  const ctx = c.getContext('2d');
+  ctx.clearRect(0, 0, W, H);
+
+  if (!data || data.length === 0) return;
+
+  const min = Math.min(...data);
+  const max = Math.max(...data);
+  const range = max - min || 1;
+  const pad = 4;
+
+  // Zero line
+  const zeroY = H - pad - ((0 - min) / range) * (H - 2 * pad);
+  ctx.strokeStyle = 'rgba(255,255,255,0.08)';
+  ctx.lineWidth = 0.5;
+  ctx.beginPath();
+  ctx.moveTo(0, zeroY);
+  ctx.lineTo(W, zeroY);
+  ctx.stroke();
+
+  // Signal
+  ctx.strokeStyle = color;
+  ctx.lineWidth = 1.5;
+  ctx.beginPath();
+  for (let i = 0; i < data.length; i++) {
+    const x = (i / (data.length - 1)) * W;
+    const y = H - pad - ((data[i] - min) / range) * (H - 2 * pad);
+    if (i === 0) ctx.moveTo(x, y);
+    else ctx.lineTo(x, y);
+  }
+  ctx.stroke();
+
+  // Labels
+  ctx.fillStyle = 'rgba(255,255,255,0.3)';
+  ctx.font = '9px IBM Plex Mono';
+  ctx.textAlign = 'left';
+  ctx.fillText(max.toFixed(2), 2, 10);
+  ctx.fillText(min.toFixed(2), 2, H - 2);
+}
+
+// ── Path visualization ──────────────────────────────────────────────
+function drawPathViz() {
+  const c = document.getElementById('path-canvas');
+  const W = c.offsetWidth || 400;
+  c.width = W;
+  const H = c.height;
+  const ctx = c.getContext('2d');
+  ctx.clearRect(0, 0, W, H);
+
+  // Grid
+  ctx.strokeStyle = 'rgba(255,255,255,0.05)';
+  ctx.lineWidth = 0.5;
+  for (let x = 0; x < W; x += CELL * 10) { ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, H); ctx.stroke(); }
+  for (let y = 0; y < H; y += CELL * 10) { ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(W, y); ctx.stroke(); }
+
+  // Scale label
+  ctx.fillStyle = 'rgba(255,255,255,0.2)';
+  ctx.font = '9px IBM Plex Mono';
+  ctx.textAlign = 'left';
+  ctx.fillText('10cm grid', 6, H - 6);
+
+  if (!selectedPath) {
+    ctx.fillStyle = 'rgba(255,255,255,0.15)';
+    ctx.font = '12px IBM Plex Sans';
+    ctx.textAlign = 'center';
+    ctx.fillText('select a path to visualize', W / 2, H / 2);
+    return;
+  }
+
+  if (selectedPath.path_type === 'sequential') {
+    drawSequentialPath(ctx, W, H);
+  } else if (previewData) {
+    drawContinuousPath(ctx, W, H);
+  } else {
+    ctx.fillStyle = 'rgba(255,255,255,0.15)';
+    ctx.font = '12px IBM Plex Sans';
+    ctx.textAlign = 'center';
+    ctx.fillText('click "preview" to see reconstructed path', W / 2, H / 2);
+  }
+}
+
+function drawSequentialPath(ctx, W, H) {
+  const steps = collectSteps();
+  if (steps.length === 0) return;
+
+  // Simulate path
+  const points = [{ x: 0, y: 0, angle: 0 }];
+  let cx = 0, cy = 0, angle = 0;
+
+  for (const s of steps) {
+    const headRad = (s.theta_deg || 0) * Math.PI / 180;
+    const worldDir = -Math.PI / 2 + headRad + angle;
+    const dist = s.distance_cm || 0;
+    cx += Math.cos(worldDir) * dist;
+    cy += Math.sin(worldDir) * dist;
+    angle += (s.rotation_deg || 0) * Math.PI / 180;
+    points.push({ x: cx, y: cy, angle });
+  }
+
+  // Find bounds for centering
+  const xs = points.map(p => p.x);
+  const ys = points.map(p => p.y);
+  const minX = Math.min(...xs), maxX = Math.max(...xs);
+  const minY = Math.min(...ys), maxY = Math.max(...ys);
+  const rangeX = maxX - minX || 1;
+  const rangeY = maxY - minY || 1;
+  const scale = Math.min((W - 80) / rangeX, (H - 80) / rangeY, CELL);
+  const offX = W / 2 - ((minX + maxX) / 2) * scale;
+  const offY = H / 2 + ((minY + maxY) / 2) * scale;
+
+  function toScreen(px, py) {
+    return { sx: offX + px * scale, sy: offY - py * scale };
+  }
+
+  // Draw path segments
+  for (let i = 1; i < points.length; i++) {
+    const { sx: x0, sy: y0 } = toScreen(points[i - 1].x, points[i - 1].y);
+    const { sx: x1, sy: y1 } = toScreen(points[i].x, points[i].y);
+
+    // Gradient from blue to green along path
+    const t = i / (points.length - 1);
+    const r = Math.round(77 + (62 - 77) * t);
+    const g = Math.round(158 + (207 - 158) * t);
+    const b = Math.round(247 + (122 - 247) * t);
+
+    ctx.strokeStyle = `rgb(${r},${g},${b})`;
+    ctx.lineWidth = 2.5;
+    ctx.beginPath();
+    ctx.moveTo(x0, y0);
+    ctx.lineTo(x1, y1);
+    ctx.stroke();
+
+    // Arrow head
+    const ang = Math.atan2(y1 - y0, x1 - x0);
+    ctx.fillStyle = ctx.strokeStyle;
+    ctx.beginPath();
+    ctx.moveTo(x1, y1);
+    ctx.lineTo(x1 - 10 * Math.cos(ang - 0.4), y1 - 10 * Math.sin(ang - 0.4));
+    ctx.lineTo(x1 - 10 * Math.cos(ang + 0.4), y1 - 10 * Math.sin(ang + 0.4));
+    ctx.closePath();
+    ctx.fill();
+
+    // Step number
+    const mx = (x0 + x1) / 2, my = (y0 + y1) / 2;
+    ctx.fillStyle = 'rgba(255,255,255,0.4)';
+    ctx.font = '9px IBM Plex Mono';
+    ctx.textAlign = 'center';
+    ctx.fillText(i.toString(), mx, my - 8);
+  }
+
+  // Start marker
+  const { sx: sx0, sy: sy0 } = toScreen(points[0].x, points[0].y);
+  ctx.fillStyle = var_green;
+  ctx.beginPath();
+  ctx.arc(sx0, sy0, 5, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.fillStyle = 'rgba(255,255,255,0.5)';
+  ctx.font = '10px IBM Plex Mono';
+  ctx.textAlign = 'center';
+  ctx.fillText('start', sx0, sy0 + 16);
+
+  // End marker
+  if (points.length > 1) {
+    const last = points[points.length - 1];
+    const { sx: sxe, sy: sye } = toScreen(last.x, last.y);
+    ctx.fillStyle = var_red;
+    ctx.beginPath();
+    ctx.arc(sxe, sye, 5, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.fillStyle = 'rgba(255,255,255,0.5)';
+    ctx.fillText('end', sxe, sye + 16);
+  }
+
+  // Rotation indicators
+  for (let i = 0; i < points.length; i++) {
+    const rot = i < steps.length ? (steps[i].rotation_deg || 0) : 0;
+    if (Math.abs(rot) < 0.5) continue;
+    const { sx, sy } = toScreen(points[i].x, points[i].y);
+    ctx.strokeStyle = 'rgba(240,125,58,0.5)';
+    ctx.lineWidth = 1.5;
+    ctx.beginPath();
+    const startA = -Math.PI / 2;
+    const endA = startA + rot * Math.PI / 180;
+    ctx.arc(sx, sy, 14, startA, endA, rot < 0);
+    ctx.stroke();
+  }
+}
+
+const var_green = '#3ecf7a';
+const var_red = '#f25f5c';
+
+function drawContinuousPath(ctx, W, H) {
+  if (!previewData || !previewData.vx) return;
+
+  // Integrate vx/vy to get positions (approximate)
+  const vx = previewData.vx;
+  const vy = previewData.vy;
+  const dt = 1.0 / (previewData.sample_rate || 20);
+  const points = [{ x: 0, y: 0 }];
+  let px = 0, py = 0;
+
+  for (let i = 0; i < vx.length; i++) {
+    // vx/vy are unit direction vectors, trans_speed is magnitude
+    const ts = previewData.trans_speed[i] || 0;
+    px += vx[i] * ts * dt * 5; // scale for visibility
+    py += vy[i] * ts * dt * 5;
+    points.push({ x: px, y: py });
+  }
+
+  // Find bounds
+  const xs = points.map(p => p.x);
+  const ys = points.map(p => p.y);
+  const minX = Math.min(...xs), maxX = Math.max(...xs);
+  const minY = Math.min(...ys), maxY = Math.max(...ys);
+  const rangeX = maxX - minX || 1;
+  const rangeY = maxY - minY || 1;
+  const scale = Math.min((W - 60) / rangeX, (H - 60) / rangeY);
+  const offX = W / 2 - ((minX + maxX) / 2) * scale;
+  const offY = H / 2 + ((minY + maxY) / 2) * scale;
+
+  // Draw path
+  ctx.lineWidth = 1.5;
+  ctx.beginPath();
+  for (let i = 0; i < points.length; i++) {
+    const sx = offX + points[i].x * scale;
+    const sy = offY - points[i].y * scale;
+    if (i === 0) ctx.moveTo(sx, sy);
+    else {
+      const t = i / points.length;
+      ctx.strokeStyle = `rgba(77,158,247,${0.2 + t * 0.6})`;
+      ctx.lineTo(sx, sy);
+      ctx.stroke();
+      ctx.beginPath();
+      ctx.moveTo(sx, sy);
+    }
+  }
+
+  // Start/end markers
+  const s0x = offX + points[0].x * scale;
+  const s0y = offY - points[0].y * scale;
+  ctx.fillStyle = var_green;
+  ctx.beginPath(); ctx.arc(s0x, s0y, 5, 0, Math.PI * 2); ctx.fill();
+
+  const last = points[points.length - 1];
+  const sex = offX + last.x * scale;
+  const sey = offY - last.y * scale;
+  ctx.fillStyle = var_red;
+  ctx.beginPath(); ctx.arc(sex, sey, 5, 0, Math.PI * 2); ctx.fill();
+}
+
+// ── Slider wiring ───────────────────────────────────────────────────
+document.getElementById('fft-slider').addEventListener('input', function () {
+  document.getElementById('fft-val').textContent = this.value;
+});
+document.getElementById('rec-rate').addEventListener('input', function () {
+  document.getElementById('rec-rate-val').textContent = this.value;
+});
+document.getElementById('rec-coeffs').addEventListener('input', function () {
+  document.getElementById('rec-coeffs-val').textContent = this.value;
+});
+
+// ── Status polling ──────────────────────────────────────────────────
+async function pollStatus() {
+  const data = await api('/status');
+  if (!data) {
+    document.getElementById('status-pill').className = 'status-pill';
+    document.getElementById('status-pill').textContent = 'offline';
+    return;
+  }
+  const pill = document.getElementById('status-pill');
+  pill.textContent = data.status;
+  pill.className = 'status-pill ' + data.status;
+}
+
+// ── Init ────────────────────────────────────────────────────────────
+refreshPaths();
+drawPathViz();
+setInterval(pollStatus, 1000);
+pollStatus();
+</script>
+</body>
+</html>

@@ -1,14 +1,18 @@
 """
-Face-tracking controller — rotates the robot to keep a detected face centered.
+Face-tracking controller — rotates the robot to keep a detected face centered,
+and optionally drives forward/backward to maintain distance.
 
 Uses MediaPipe Face Detection for lightweight, real-time face tracking.
-Sends rotation commands via the same UDP protocol as cam_jetson_controller.py
+Sends commands via the same UDP protocol as cam_jetson_controller.py
 (requires universal_receiver.py to be running).
 
+Horizontal centering is always handled by rotation (rot_speed).
+Forward/backward is opt-in via --follow, using face bounding-box area.
+
 Usage:
-    python face_follow_controller.py
-    python face_follow_controller.py --camera 1 --preview
-    python face_follow_controller.py --max-rot 2.0 --deadzone 0.15
+    python face_follow_controller.py --preview
+    python face_follow_controller.py --follow --preview
+    python face_follow_controller.py --follow --target-area 0.08 --max-range-speed 3.0
 """
 
 import argparse
@@ -28,6 +32,9 @@ load_dotenv(os.path.join(os.path.dirname(__file__), '..', '.env'))
 
 DEADZONE = 0.10
 MAX_ROT_SPEED = 3.0
+MAX_RANGE_SPEED = 5.0
+AREA_DEADZONE = 0.18
+AREA_GAIN = 0.70
 CONTROL_HZ = 20
 LOST_TIMEOUT = 1.0
 DEFAULT_UDP_HOST = os.getenv("ROBOT_IP", "127.0.0.1")
@@ -41,6 +48,11 @@ def parse_args():
     parser.add_argument("--port", type=int, default=DEFAULT_UDP_PORT, help="UDP receiver port")
     parser.add_argument("--max-rot", type=float, default=MAX_ROT_SPEED, help="Max rotation speed in turns/s")
     parser.add_argument("--deadzone", type=float, default=DEADZONE, help="Center deadzone as fraction of half-width")
+    parser.add_argument("--follow", action="store_true", help="Enable forward/backward driving to maintain distance")
+    parser.add_argument("--max-range-speed", type=float, default=MAX_RANGE_SPEED, help="Max forward/back speed in turns/s (requires --follow)")
+    parser.add_argument("--area-deadzone", type=float, default=AREA_DEADZONE, help="Accepted area error before fwd/back correction (requires --follow)")
+    parser.add_argument("--area-gain", type=float, default=AREA_GAIN, help="Area error that maps to full fwd/back command (requires --follow)")
+    parser.add_argument("--target-area", type=float, default=None, help="Target face bbox area as fraction of frame (0..1). Auto-captured on first detection if omitted.")
     parser.add_argument("--preview", action="store_true", help="Show OpenCV window with detection overlay")
     return parser.parse_args()
 
@@ -94,12 +106,15 @@ def main():
     if args.preview:
         cv2.namedWindow("Face Tracking")
 
+    if args.follow:
+        print("Follow mode ON — will drive fwd/back to maintain distance.")
     print("Face tracking active. Press Q/ESC to quit." if args.preview else "Face tracking active. Ctrl+C to stop.")
 
     interval = 1.0 / CONTROL_HZ
     last_control = 0.0
     last_seen = 0.0
     driving = False
+    target_area = args.target_area
 
     try:
         while True:
@@ -130,17 +145,35 @@ def main():
             if now - last_control >= interval:
                 if face_center_x is not None:
                     last_seen = now
-                    error = (face_center_x - 0.5) / 0.5  # -1..+1
+                    horiz_error = (face_center_x - 0.5) / 0.5  # -1..+1
+                    face_area = best_box.width * best_box.height
 
-                    if abs(error) < args.deadzone:
+                    # Rotation from horizontal error
+                    rot_speed = 0.0
+                    if abs(horiz_error) >= args.deadzone:
+                        rot_magnitude = (abs(horiz_error) - args.deadzone) / (1.0 - args.deadzone)
+                        rot_speed = (1.0 if horiz_error > 0 else -1.0) * clamp(rot_magnitude, 0.0, 1.0) * args.max_rot
+
+                    # Forward/back from area error (only with --follow)
+                    vx = 0.0
+                    trans_speed = 0.0
+                    if args.follow:
+                        if target_area is None:
+                            target_area = face_area
+                            print(f"Target area captured: {target_area:.4f}")
+                        area_error = (target_area - face_area) / target_area  # +ve = too far, -ve = too close
+                        if abs(area_error) >= args.area_deadzone:
+                            range_mag = (abs(area_error) - args.area_deadzone) / max(0.01, args.area_gain)
+                            vx = (1.0 if area_error > 0 else -1.0) * clamp(range_mag, 0.0, 1.0)
+                            trans_speed = abs(vx) * args.max_range_speed
+
+                    if abs(rot_speed) < 0.01 and abs(vx) < 0.01:
                         if driving:
                             udp_sock.sendto(b"S", udp_dest)
                             driving = False
                             state["driving"] = False
                     else:
-                        rot_magnitude = (abs(error) - args.deadzone) / (1.0 - args.deadzone)
-                        rot_speed = (1.0 if error > 0 else -1.0) * clamp(rot_magnitude, 0.0, 1.0) * args.max_rot
-                        pkt = b"D" + struct.pack("<ffff", 0.0, 0.0, 0.0, rot_speed)
+                        pkt = b"D" + struct.pack("<ffff", vx, 0.0, trans_speed, rot_speed)
                         udp_sock.sendto(pkt, udp_dest)
                         driving = True
                         state["driving"] = True
@@ -171,9 +204,13 @@ def main():
 
                 if face_center_x is not None:
                     error = (face_center_x - 0.5) / 0.5
-                    status = f"err={error:+.2f}"
+                    status = f"rot={error:+.2f}"
                     if abs(error) < args.deadzone:
                         status += " CENTERED"
+                    if args.follow and target_area is not None:
+                        face_area = best_box.width * best_box.height
+                        area_err = (target_area - face_area) / target_area
+                        status += f"  area={area_err:+.2f}"
                     color = (0, 255, 0)
                 elif driving:
                     status = "FACE LOST (coasting)"

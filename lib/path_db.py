@@ -1,151 +1,135 @@
 """
-path_db.py — SQLite storage + FFT compression for sequential & continuous paths.
+path_db.py — JSON storage + FFT compression for sequential & continuous paths.
 """
 
 import json
-import sqlite3
 import os
+import threading
 import numpy as np
 
-DB_PATH = os.path.join(os.path.dirname(__file__), "..", "paths.db")
+JSON_PATH = os.path.join(os.path.dirname(__file__), "..", "paths.json")
+
+_lock = threading.Lock()
 
 
-def _get_conn():
-    conn = sqlite3.connect(DB_PATH)
-    conn.row_factory = sqlite3.Row
-    conn.execute("PRAGMA foreign_keys = ON")
-    return conn
+def _read_db():
+    with open(JSON_PATH, "r") as f:
+        return json.load(f)
+
+
+def _write_db(db):
+    with open(JSON_PATH, "w") as f:
+        json.dump(db, f, indent=2)
 
 
 def init_db():
-    conn = _get_conn()
-    conn.executescript("""
-        CREATE TABLE IF NOT EXISTS paths (
-            id          INTEGER PRIMARY KEY,
-            name        TEXT NOT NULL,
-            path_type   TEXT NOT NULL,
-            created_at  TEXT DEFAULT (datetime('now')),
-            metadata    TEXT
-        );
-
-        CREATE TABLE IF NOT EXISTS path_steps (
-            id           INTEGER PRIMARY KEY,
-            path_id      INTEGER REFERENCES paths(id) ON DELETE CASCADE,
-            step_order   INTEGER NOT NULL,
-            distance_cm  REAL NOT NULL DEFAULT 0,
-            theta_deg    REAL NOT NULL DEFAULT 0,
-            rotation_deg REAL NOT NULL DEFAULT 0,
-            vel_pct      REAL NOT NULL DEFAULT 30,
-            delay_ms     INTEGER NOT NULL DEFAULT 0,
-            UNIQUE(path_id, step_order)
-        );
-
-        CREATE TABLE IF NOT EXISTS path_continuous (
-            id                 INTEGER PRIMARY KEY,
-            path_id            INTEGER REFERENCES paths(id) ON DELETE CASCADE,
-            sample_rate        REAL NOT NULL,
-            num_samples        INTEGER NOT NULL,
-            duration_s         REAL NOT NULL,
-            num_coefficients   INTEGER NOT NULL,
-            vx_coeffs          BLOB NOT NULL,
-            vy_coeffs          BLOB NOT NULL,
-            trans_speed_coeffs BLOB NOT NULL,
-            rot_speed_coeffs   BLOB NOT NULL
-        );
-    """)
-    conn.commit()
-    conn.close()
+    if not os.path.exists(JSON_PATH):
+        _write_db({"next_id": 1, "paths": {}})
 
 
 # --------------- Path CRUD ---------------
 
 def create_path(name, path_type, metadata=None):
-    conn = _get_conn()
-    cur = conn.execute(
-        "INSERT INTO paths (name, path_type, metadata) VALUES (?, ?, ?)",
-        (name, path_type, json.dumps(metadata) if metadata else None),
-    )
-    path_id = cur.lastrowid
-    conn.commit()
-    conn.close()
+    with _lock:
+        db = _read_db()
+        path_id = db["next_id"]
+        db["next_id"] = path_id + 1
+        from datetime import datetime
+        db["paths"][str(path_id)] = {
+            "id": path_id,
+            "name": name,
+            "path_type": path_type,
+            "created_at": datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S"),
+            "metadata": json.dumps(metadata) if metadata else None,
+            "steps": [],
+            "continuous": None,
+        }
+        _write_db(db)
     return path_id
 
 
 def list_paths():
-    conn = _get_conn()
-    rows = conn.execute(
-        "SELECT id, name, path_type, created_at, metadata FROM paths ORDER BY id"
-    ).fetchall()
-    conn.close()
-    return [dict(r) for r in rows]
+    db = _read_db()
+    results = []
+    for p in sorted(db["paths"].values(), key=lambda x: x["id"]):
+        results.append({
+            "id": p["id"],
+            "name": p["name"],
+            "path_type": p["path_type"],
+            "created_at": p["created_at"],
+            "metadata": p["metadata"],
+        })
+    return results
 
 
 def get_path(path_id):
-    conn = _get_conn()
-    row = conn.execute("SELECT * FROM paths WHERE id = ?", (path_id,)).fetchone()
-    conn.close()
-    return dict(row) if row else None
+    db = _read_db()
+    p = db["paths"].get(str(path_id))
+    if not p:
+        return None
+    return {
+        "id": p["id"],
+        "name": p["name"],
+        "path_type": p["path_type"],
+        "created_at": p["created_at"],
+        "metadata": p["metadata"],
+    }
 
 
 def delete_path(path_id):
-    conn = _get_conn()
-    conn.execute("DELETE FROM paths WHERE id = ?", (path_id,))
-    conn.commit()
-    conn.close()
+    with _lock:
+        db = _read_db()
+        db["paths"].pop(str(path_id), None)
+        _write_db(db)
 
 
 # --------------- Sequential Steps ---------------
 
 def set_steps(path_id, steps):
     """Replace all steps for a path. steps: list of dicts."""
-    conn = _get_conn()
-    conn.execute("DELETE FROM path_steps WHERE path_id = ?", (path_id,))
-    for i, s in enumerate(steps):
-        conn.execute(
-            """INSERT INTO path_steps
-               (path_id, step_order, distance_cm, theta_deg, rotation_deg, vel_pct, delay_ms)
-               VALUES (?, ?, ?, ?, ?, ?, ?)""",
-            (
-                path_id, i,
-                s.get("distance_cm", 0),
-                s.get("theta_deg", 0),
-                s.get("rotation_deg", 0),
-                s.get("vel_pct", 30),
-                s.get("delay_ms", 0),
-            ),
-        )
-    conn.commit()
-    conn.close()
+    with _lock:
+        db = _read_db()
+        p = db["paths"].get(str(path_id))
+        if not p:
+            return
+        p["steps"] = [
+            {
+                "step_order": i,
+                "distance_cm": s.get("distance_cm", 0),
+                "theta_deg": s.get("theta_deg", 0),
+                "rotation_deg": s.get("rotation_deg", 0),
+                "vel_pct": s.get("vel_pct", 30),
+                "delay_ms": s.get("delay_ms", 0),
+            }
+            for i, s in enumerate(steps)
+        ]
+        _write_db(db)
 
 
 def get_steps(path_id):
-    conn = _get_conn()
-    rows = conn.execute(
-        "SELECT * FROM path_steps WHERE path_id = ? ORDER BY step_order",
-        (path_id,),
-    ).fetchall()
-    conn.close()
-    return [dict(r) for r in rows]
+    db = _read_db()
+    p = db["paths"].get(str(path_id))
+    if not p:
+        return []
+    return p.get("steps", [])
 
 
 # --------------- FFT Compression ---------------
 
 def _compress_channel(samples, num_coefficients):
-    """FFT compress a single channel. Returns sparse JSON blob."""
+    """FFT compress a single channel. Returns sparse list of [index, real, imag]."""
     coeffs = np.fft.rfft(samples)
     magnitudes = np.abs(coeffs)
-    # Keep top-N by magnitude
     n = min(num_coefficients, len(coeffs))
     top_indices = np.argsort(magnitudes)[-n:]
     sparse = []
     for idx in top_indices:
-        sparse.append((int(idx), float(coeffs[idx].real), float(coeffs[idx].imag)))
-    return json.dumps(sparse).encode("utf-8")
+        sparse.append([int(idx), float(coeffs[idx].real), float(coeffs[idx].imag)])
+    return sparse
 
 
-def _decompress_channel(blob, num_samples):
+def _decompress_channel(sparse, num_samples):
     """Reconstruct a channel from sparse FFT coefficients."""
-    sparse = json.loads(blob)
     n_coeffs = num_samples // 2 + 1
     coeffs = np.zeros(n_coeffs, dtype=complex)
     for idx, real, imag in sparse:
@@ -186,88 +170,83 @@ class ContinuousRecorder:
         ts_c = _compress_channel(np.array(self.trans_buf), num_coefficients)
         rs_c = _compress_channel(np.array(self.rot_buf), num_coefficients)
 
-        conn = _get_conn()
-        conn.execute(
-            """INSERT INTO path_continuous
-               (path_id, sample_rate, num_samples, duration_s, num_coefficients,
-                vx_coeffs, vy_coeffs, trans_speed_coeffs, rot_speed_coeffs)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-            (self.path_id, self.sample_rate, n, duration, num_coefficients,
-             vx_c, vy_c, ts_c, rs_c),
-        )
-        # Update path metadata with duration
-        conn.execute(
-            "UPDATE paths SET metadata = ? WHERE id = ?",
-            (json.dumps({"duration_s": duration, "num_samples": n}), self.path_id),
-        )
-        conn.commit()
-        conn.close()
+        with _lock:
+            db = _read_db()
+            p = db["paths"].get(str(self.path_id))
+            if p:
+                p["continuous"] = {
+                    "sample_rate": self.sample_rate,
+                    "num_samples": n,
+                    "duration_s": duration,
+                    "num_coefficients": num_coefficients,
+                    "vx_coeffs": vx_c,
+                    "vy_coeffs": vy_c,
+                    "trans_speed_coeffs": ts_c,
+                    "rot_speed_coeffs": rs_c,
+                }
+                p["metadata"] = json.dumps({"duration_s": duration, "num_samples": n})
+                _write_db(db)
         return {"num_samples": n, "duration_s": duration}
 
 
 def reconstruct_continuous(path_id):
     """Reconstruct all 4 channels. Returns list of (vx, vy, trans_speed, rot_speed)."""
-    conn = _get_conn()
-    row = conn.execute(
-        "SELECT * FROM path_continuous WHERE path_id = ?", (path_id,)
-    ).fetchone()
-    conn.close()
-    if not row:
+    db = _read_db()
+    p = db["paths"].get(str(path_id))
+    if not p or not p.get("continuous"):
         return None
 
-    n = row["num_samples"]
-    vx = _decompress_channel(row["vx_coeffs"], n)
-    vy = _decompress_channel(row["vy_coeffs"], n)
-    ts = _decompress_channel(row["trans_speed_coeffs"], n)
-    rs = _decompress_channel(row["rot_speed_coeffs"], n)
+    c = p["continuous"]
+    n = c["num_samples"]
+    vx = _decompress_channel(c["vx_coeffs"], n)
+    vy = _decompress_channel(c["vy_coeffs"], n)
+    ts = _decompress_channel(c["trans_speed_coeffs"], n)
+    rs = _decompress_channel(c["rot_speed_coeffs"], n)
     return list(zip(vx.tolist(), vy.tolist(), ts.tolist(), rs.tolist()))
 
 
 def get_continuous_info(path_id):
     """Get continuous recording metadata."""
-    conn = _get_conn()
-    row = conn.execute(
-        "SELECT sample_rate, num_samples, duration_s, num_coefficients FROM path_continuous WHERE path_id = ?",
-        (path_id,),
-    ).fetchone()
-    conn.close()
-    return dict(row) if row else None
+    db = _read_db()
+    p = db["paths"].get(str(path_id))
+    if not p or not p.get("continuous"):
+        return None
+    c = p["continuous"]
+    return {
+        "sample_rate": c["sample_rate"],
+        "num_samples": c["num_samples"],
+        "duration_s": c["duration_s"],
+        "num_coefficients": c["num_coefficients"],
+    }
 
 
 def recompress_continuous(path_id, num_coefficients):
     """Re-compress with different coefficient count. Returns reconstructed preview."""
-    conn = _get_conn()
-    row = conn.execute(
-        "SELECT * FROM path_continuous WHERE path_id = ?", (path_id,)
-    ).fetchone()
-    if not row:
-        conn.close()
-        return None
+    with _lock:
+        db = _read_db()
+        p = db["paths"].get(str(path_id))
+        if not p or not p.get("continuous"):
+            return None
 
-    n = row["num_samples"]
-    # Decompress with original coefficients
-    vx = _decompress_channel(row["vx_coeffs"], n)
-    vy = _decompress_channel(row["vy_coeffs"], n)
-    ts = _decompress_channel(row["trans_speed_coeffs"], n)
-    rs = _decompress_channel(row["rot_speed_coeffs"], n)
+        c = p["continuous"]
+        n = c["num_samples"]
+        vx = _decompress_channel(c["vx_coeffs"], n)
+        vy = _decompress_channel(c["vy_coeffs"], n)
+        ts = _decompress_channel(c["trans_speed_coeffs"], n)
+        rs = _decompress_channel(c["rot_speed_coeffs"], n)
 
-    # Re-compress with new coefficient count
-    vx_c = _compress_channel(vx, num_coefficients)
-    vy_c = _compress_channel(vy, num_coefficients)
-    ts_c = _compress_channel(ts, num_coefficients)
-    rs_c = _compress_channel(rs, num_coefficients)
+        vx_c = _compress_channel(vx, num_coefficients)
+        vy_c = _compress_channel(vy, num_coefficients)
+        ts_c = _compress_channel(ts, num_coefficients)
+        rs_c = _compress_channel(rs, num_coefficients)
 
-    conn.execute(
-        """UPDATE path_continuous
-           SET num_coefficients = ?, vx_coeffs = ?, vy_coeffs = ?,
-               trans_speed_coeffs = ?, rot_speed_coeffs = ?
-           WHERE path_id = ?""",
-        (num_coefficients, vx_c, vy_c, ts_c, rs_c, path_id),
-    )
-    conn.commit()
-    conn.close()
+        c["num_coefficients"] = num_coefficients
+        c["vx_coeffs"] = vx_c
+        c["vy_coeffs"] = vy_c
+        c["trans_speed_coeffs"] = ts_c
+        c["rot_speed_coeffs"] = rs_c
+        _write_db(db)
 
-    # Return preview of reconstructed signals
     vx2 = _decompress_channel(vx_c, n)
     vy2 = _decompress_channel(vy_c, n)
     ts2 = _decompress_channel(ts_c, n)

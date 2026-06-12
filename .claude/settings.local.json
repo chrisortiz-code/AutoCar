@@ -6,7 +6,8 @@
       "Bash(xxd:*)",
       "Bash(\"C:\\\\Users\\\\Chris\\\\AutoCar\\\\README.md\":*)",
       "Bash(mkdir:*)",
-      "Bash(mv:*)"
+      "Bash(mv:*)",
+      "Bash(sqlite3:*)"
     ]
   }
 }

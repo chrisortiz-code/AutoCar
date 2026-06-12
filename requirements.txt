@@ -1,0 +1,8 @@
+opencv-python
+numpy
+python-dotenv
+pygame
+flask
+flask-cors
+python-can
+gs_usb

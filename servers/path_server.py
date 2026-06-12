@@ -25,6 +25,7 @@ CORS(app)
 # ── UDP sender (same protocol as flask_gui_server.py) ────────────────
 UDP_HOST = os.getenv("ROBOT_IP", "127.0.0.1")
 UDP_PORT = int(os.getenv("UDP_PORT", "5555"))
+RELAY_PORT = int(os.getenv("RELAY_PORT", "5556"))
 # NOTE: When running on the Jetson, ROBOT_IP can stay as 127.0.0.1 (default).
 # Set ROBOT_IP in .env only when running this server on a remote PC.
 _udp_sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
@@ -299,6 +300,16 @@ def get_path(pid):
     return jsonify(p)
 
 
+@app.route("/paths/<int:pid>", methods=["PATCH"])
+def rename_path(pid):
+    data = request.json
+    name = data.get("name")
+    if not name:
+        return jsonify({"ok": False, "error": "name required"}), 400
+    path_db.rename_path(pid, name)
+    return jsonify({"ok": True})
+
+
 @app.route("/paths/<int:pid>", methods=["DELETE"])
 def delete_path(pid):
     path_db.delete_path(pid)
@@ -453,7 +464,34 @@ def stop_all():
     return jsonify({"ok": True})
 
 
+def _udp_relay():
+    """Listen for controller UDP packets, forward to universal_receiver,
+    and capture samples when recording."""
+    relay_sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    relay_sock.bind(("0.0.0.0", RELAY_PORT))
+    relay_sock.settimeout(1.0)
+    print(f"UDP relay listening on :{RELAY_PORT} -> forwarding to {UDP_HOST}:{UDP_PORT}")
+
+    while True:
+        try:
+            data, addr = relay_sock.recvfrom(64)
+        except socket.timeout:
+            continue
+
+        # Always forward to universal_receiver
+        _udp_sock.sendto(data, _udp_dest)
+
+        # Capture D packets when recording
+        if len(data) >= 17 and chr(data[0]) == "D":
+            with _state_lock:
+                if _state["status"] == "recording" and _recorder is not None:
+                    vx, vy, trans_speed, rot_speed = struct.unpack("<ffff", data[1:17])
+                    _recorder.add_sample(vx, vy, trans_speed, rot_speed)
+                    _state["samples"] = _recorder.num_samples
+
+
 if __name__ == "__main__":
+    threading.Thread(target=_udp_relay, daemon=True).start()
     print("\nPath server running at http://localhost:5001")
     print(f"Sending UDP commands to {UDP_HOST}:{UDP_PORT}")
     print("Make sure universal_receiver.py is running!\n")

@@ -18,8 +18,15 @@ import pygame
 load_dotenv(os.path.join(os.path.dirname(__file__), '..', '.env'))
 
 # ── Network config ──────────────────────────────────────────────────
-JETSON_IP   = sys.argv[1] if len(sys.argv) > 1 else os.getenv("ROBOT_IP", "192.168.2.83")
-JETSON_PORT = int(os.getenv("UDP_PORT", "5555"))
+RELAY_PORT = os.getenv("RELAY_PORT")
+if RELAY_PORT:
+    # Send to path_server relay running locally, which forwards to the Jetson
+    JETSON_IP   = "127.0.0.1"
+    JETSON_PORT = int(RELAY_PORT)
+else:
+    # Direct mode: send straight to universal_receiver on the Jetson
+    JETSON_IP   = sys.argv[1] if len(sys.argv) > 1 else os.getenv("ROBOT_IP", "192.168.2.83")
+    JETSON_PORT = int(os.getenv("UDP_PORT", "5555"))
 
 # ── Tuning ──────────────────────────────────────────────────────────
 DEADZONE   = 0.12

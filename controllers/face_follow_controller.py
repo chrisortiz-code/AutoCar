@@ -53,6 +53,7 @@ def parse_args():
     parser.add_argument("--area-deadzone", type=float, default=AREA_DEADZONE, help="Accepted area error before fwd/back correction (requires --follow)")
     parser.add_argument("--area-gain", type=float, default=AREA_GAIN, help="Area error that maps to full fwd/back command (requires --follow)")
     parser.add_argument("--target-area", type=float, default=None, help="Target face bbox area as fraction of frame (0..1). Auto-captured on first detection if omitted.")
+    parser.add_argument("--detect-width", type=int, default=320, help="Downscale frame to this width for detection (lower = faster)")
     parser.add_argument("--preview", action="store_true", help="Show OpenCV window with detection overlay")
     return parser.parse_args()
 
@@ -126,7 +127,10 @@ def main():
             fh, fw = frame.shape[:2]
             now = time.time()
 
-            rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+            # Downscale for faster inference — coords are relative so they still apply
+            scale = args.detect_width / fw
+            small = cv2.resize(frame, (args.detect_width, int(fh * scale)), interpolation=cv2.INTER_AREA)
+            rgb_frame = cv2.cvtColor(small, cv2.COLOR_BGR2RGB)
             results = face_detection.process(rgb_frame)
 
             face_center_x = None

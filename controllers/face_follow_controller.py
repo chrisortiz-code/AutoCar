@@ -367,7 +367,7 @@ def main():
                     web.set_metrics(rot_speed=rot_speed)
                 elif tracking and not best:
                     web.set_state("lost")
-                elif not frozen_frame:
+                elif frozen_frame is None:
                     web.set_state("idle")
 
             # --- OpenCV preview ---

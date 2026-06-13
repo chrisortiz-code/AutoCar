@@ -3,22 +3,76 @@ Face detection benchmark — compare backends on live camera feed.
 
 Usage:
     python -m face_detection.bench --backend mediapipe --preview
-    python -m face_detection.bench --backend yunet --model face_detection_yunet_2023mar.onnx --preview
+    python -m face_detection.bench --backend mediapipe --stream --frames 0
+    python -m face_detection.bench --backend yunet --model face_detection_yunet_2023mar.onnx --stream
     python -m face_detection.bench --backend yolo --model yolov8n-face.pt --preview
     python -m face_detection.bench --backend scrfd --preview
-    python -m face_detection.bench --backend mediapipe --frames 300
+
+--preview: OpenCV window (local display or X11)
+--stream:  MJPEG over HTTP — open http://<jetson-ip>:8090 in a browser
 
 Prints latency stats (min/avg/p95/max) and average FPS after the run.
 """
 
 import argparse
 import platform
+import threading
 import time
 
 import cv2
 import numpy as np
 
 from .base import BACKENDS, create_detector
+
+
+class MJPEGServer:
+    """Tiny MJPEG-over-HTTP server. One frame buffer, any number of viewers."""
+
+    def __init__(self, port=8090):
+        from http.server import HTTPServer, BaseHTTPRequestHandler
+
+        self._frame = None
+        self._lock = threading.Lock()
+        self._port = port
+
+        parent = self
+
+        class Handler(BaseHTTPRequestHandler):
+            def do_GET(self):
+                self.send_response(200)
+                self.send_header("Content-Type",
+                                 "multipart/x-mixed-replace; boundary=frame")
+                self.end_headers()
+                try:
+                    while True:
+                        with parent._lock:
+                            jpg = parent._frame
+                        if jpg is None:
+                            time.sleep(0.01)
+                            continue
+                        self.wfile.write(b"--frame\r\n"
+                                         b"Content-Type: image/jpeg\r\n\r\n"
+                                         + jpg + b"\r\n")
+                        time.sleep(0.033)  # ~30 fps cap
+                except (BrokenPipeError, ConnectionResetError):
+                    pass
+
+            def log_message(self, *args):
+                pass  # silence per-request logs
+
+        self._server = HTTPServer(("0.0.0.0", port), Handler)
+        self._thread = threading.Thread(target=self._server.serve_forever,
+                                        daemon=True)
+        self._thread.start()
+
+    def update(self, frame_bgr):
+        _, jpg = cv2.imencode(".jpg", frame_bgr,
+                              [cv2.IMWRITE_JPEG_QUALITY, 70])
+        with self._lock:
+            self._frame = jpg.tobytes()
+
+    def stop(self):
+        self._server.shutdown()
 
 
 def main():
@@ -36,7 +90,11 @@ def main():
     parser.add_argument("--frames", type=int, default=200,
                         help="Number of frames to benchmark (0 = unlimited)")
     parser.add_argument("--preview", action="store_true",
-                        help="Show live preview with detections")
+                        help="Show live preview with detections (OpenCV window)")
+    parser.add_argument("--stream", action="store_true",
+                        help="Serve MJPEG stream over HTTP (open in browser)")
+    parser.add_argument("--stream-port", type=int, default=8090,
+                        help="Port for MJPEG stream")
     args = parser.parse_args()
 
     # Build kwargs for the detector
@@ -59,9 +117,16 @@ def main():
         print(f"Cannot open camera {args.camera}")
         return
 
+    mjpeg = None
+    if args.stream:
+        mjpeg = MJPEGServer(port=args.stream_port)
+        print(f"MJPEG stream at http://0.0.0.0:{args.stream_port}")
+
     if args.preview:
         win = f"Bench: {args.backend}"
         cv2.namedWindow(win)
+
+    show = args.preview or args.stream
 
     latencies = []
     count = 0
@@ -79,7 +144,7 @@ def main():
             latencies.append(dt)
             count += 1
 
-            if args.preview:
+            if show:
                 fh, fw = frame.shape[:2]
                 for f in faces:
                     x1 = int((f.cx - f.w / 2) * fw)
@@ -99,10 +164,14 @@ def main():
                 cv2.putText(frame, info, (8, 24),
                             cv2.FONT_HERSHEY_SIMPLEX, 0.55, (0, 200, 255), 2)
 
-                cv2.imshow(win, frame)
-                key = cv2.waitKey(1) & 0xFF
-                if key in (ord("q"), 27):
-                    break
+                if mjpeg:
+                    mjpeg.update(frame)
+
+                if args.preview:
+                    cv2.imshow(win, frame)
+                    key = cv2.waitKey(1) & 0xFF
+                    if key in (ord("q"), 27):
+                        break
             else:
                 if count % 50 == 0:
                     avg = np.mean(latencies[-50:])
@@ -118,6 +187,8 @@ def main():
         cap.release()
         if args.preview:
             cv2.destroyAllWindows()
+        if mjpeg:
+            mjpeg.stop()
         detector.close()
 
     if latencies:

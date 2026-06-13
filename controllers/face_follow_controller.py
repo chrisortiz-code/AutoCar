@@ -1,22 +1,21 @@
 """
-Face-tracking controller — rotates the robot to keep a detected face centered,
-and optionally drives forward/backward to maintain distance.
+Face-tracking controller — two modes:
+
+  Trace (default): Rotates to keep the largest face centered. Starts
+  immediately, no interaction needed.
+
+  Follow (--follow): Trace + forward/backward to maintain distance.
+  Requires selecting a target face area first — click face in web UI
+  or preview, then press SPACE to confirm.
 
 Uses the pluggable face_detection framework — any backend works.
 Sends commands via the same UDP protocol as cam_jetson_controller.py
 (requires universal_receiver.py to be running).
 
-Horizontal centering is always handled by rotation (rot_speed).
-Forward/backward is opt-in via --follow, using face bounding-box area.
-
-Display modes:
-  --preview    OpenCV window (local/X11)
-  --stream     Web UI at http://<jetson-ip>:8090 — click face, space to track
-
 Usage:
     python face_follow_controller.py --backend mediapipe --stream
-    python face_follow_controller.py --backend yolo --model yolov8n-face.pt --stream --follow
     python face_follow_controller.py --backend mediapipe --preview
+    python face_follow_controller.py --follow --backend mediapipe --stream
 """
 
 import argparse
@@ -49,7 +48,7 @@ DEFAULT_UDP_PORT = int(os.getenv("UDP_PORT", "5555"))
 
 
 def parse_args():
-    parser = argparse.ArgumentParser(description="Face-tracking rotation controller")
+    parser = argparse.ArgumentParser(description="Face-tracking controller")
     parser.add_argument("--backend", default="mediapipe", choices=BACKENDS.keys(),
                         help="Face detection backend")
     parser.add_argument("--model", default=None,
@@ -59,7 +58,8 @@ def parse_args():
     parser.add_argument("--port", type=int, default=DEFAULT_UDP_PORT, help="UDP receiver port")
     parser.add_argument("--max-rot", type=float, default=MAX_ROT_SPEED, help="Max rotation speed in turns/s")
     parser.add_argument("--deadzone", type=float, default=DEADZONE, help="Center deadzone as fraction of half-width")
-    parser.add_argument("--follow", action="store_true", help="Enable forward/backward driving to maintain distance")
+    parser.add_argument("--follow", action="store_true",
+                        help="Enable follow mode: trace + fwd/back. Click face to set target area.")
     parser.add_argument("--max-range-speed", type=float, default=MAX_RANGE_SPEED, help="Max forward/back speed in turns/s")
     parser.add_argument("--area-deadzone", type=float, default=AREA_DEADZONE, help="Accepted area error before fwd/back correction")
     parser.add_argument("--area-gain", type=float, default=AREA_GAIN, help="Area error that maps to full fwd/back command")
@@ -73,7 +73,7 @@ def clamp(value, low, high):
     return max(low, min(high, value))
 
 
-def draw_overlay(frame, faces, best, args, tracking, target_area, rot_speed, vx):
+def draw_overlay(frame, faces, best, args, mode, target_area, rot_speed, vx):
     """Draw bounding boxes and status on frame."""
     fh, fw = frame.shape[:2]
 
@@ -85,7 +85,9 @@ def draw_overlay(frame, faces, best, args, tracking, target_area, rot_speed, vx)
         is_best = (best is not None and f is best)
         color = (0, 255, 0) if is_best else (100, 100, 100)
         cv2.rectangle(frame, (x1, y1), (x2, y2), color, 2)
-        label = f"{f.confidence:.0%} a={f.area:.4f}"
+        label = f"{f.confidence:.0%}"
+        if args.follow:
+            label += f" a={f.area:.4f}"
         cv2.putText(frame, label, (x1, max(y1 - 6, 14)),
                     cv2.FONT_HERSHEY_SIMPLEX, 0.45, color, 1)
 
@@ -97,17 +99,17 @@ def draw_overlay(frame, faces, best, args, tracking, target_area, rot_speed, vx)
     cv2.line(frame, (center_x + dz_px, 0), (center_x + dz_px, fh), (50, 50, 50), 1)
 
     # Status text
-    if tracking and best is not None:
-        error = (best.cx - 0.5) / 0.5
-        status = f"TRACKING rot={rot_speed:+.2f}"
-        if args.follow and target_area:
-            area_err = (target_area - best.area) / target_area
-            status += f"  area_err={area_err:+.2f}  vx={vx:+.2f}"
+    if mode == "tracing" and best is not None:
+        status = f"TRACING rot={rot_speed:+.2f}"
         cv2.putText(frame, status, (8, 24), cv2.FONT_HERSHEY_SIMPLEX, 0.55, (0, 255, 0), 2)
-    elif tracking:
+    elif mode == "following" and best is not None:
+        area_err = (target_area - best.area) / target_area if target_area else 0
+        status = f"FOLLOWING rot={rot_speed:+.2f}  area_err={area_err:+.2f}  vx={vx:+.2f}"
+        cv2.putText(frame, status, (8, 24), cv2.FONT_HERSHEY_SIMPLEX, 0.55, (0, 255, 0), 2)
+    elif mode in ("tracing", "following"):
         cv2.putText(frame, "FACE LOST", (8, 24), cv2.FONT_HERSHEY_SIMPLEX, 0.55, (0, 0, 255), 2)
-    else:
-        cv2.putText(frame, "Click face to select", (8, 24),
+    elif mode == "selecting":
+        cv2.putText(frame, "Click face to select target distance", (8, 24),
                     cv2.FONT_HERSHEY_SIMPLEX, 0.55, (0, 200, 255), 2)
 
 
@@ -183,14 +185,15 @@ def main():
         cv2.namedWindow("Face Tracking")
 
     if args.follow:
-        print("Follow mode ON — will drive fwd/back to maintain distance.")
+        print("Follow mode: click face to set target distance, then SPACE to start.")
+    else:
+        print("Trace mode: rotating to track largest face.")
     print("Ctrl+C to stop.")
 
     interval = 1.0 / CONTROL_HZ
     last_control = 0.0
     last_seen = 0.0
     driving = False
-    tracking = False
     target_area = None
     frozen_frame = None
     selected_face = None
@@ -198,6 +201,10 @@ def main():
     vx = 0.0
     last_faces = []
     last_display_frame = None
+
+    # Trace mode: start tracking immediately
+    # Follow mode: wait for user to select a face
+    tracking = not args.follow
 
     try:
         while True:
@@ -209,71 +216,68 @@ def main():
             fh, fw = frame.shape[:2]
             now = time.time()
 
-            # --- Handle web UI commands ---
-            if web:
-                click = web.poll_click()
-                if click is not None:
-                    # Use faces from the last displayed frame, not a new detection
-                    cx, cy = click
-                    selected_face = find_nearest_face(last_faces, cx, cy)
-                    print(f"Click at ({cx:.2f}, {cy:.2f}), "
-                          f"{len(last_faces)} faces available, "
-                          f"selected={'yes' if selected_face else 'no'}")
-                    if selected_face:
-                        frozen_frame = (last_display_frame.copy()
-                                        if last_display_frame is not None
-                                        else frame.copy())
+            # --- Handle interactive commands (follow mode only) ---
+            if args.follow:
+                if web:
+                    click = web.poll_click()
+                    if click is not None:
+                        cx, cy = click
+                        selected_face = find_nearest_face(last_faces, cx, cy)
+                        print(f"Click at ({cx:.2f}, {cy:.2f}), "
+                              f"{len(last_faces)} faces available, "
+                              f"selected={'yes' if selected_face else 'no'}")
+                        if selected_face:
+                            frozen_frame = (last_display_frame.copy()
+                                            if last_display_frame is not None
+                                            else frame.copy())
+                            tracking = False
+                            if driving:
+                                udp_sock.sendto(b"S", udp_dest)
+                                driving = False
+                                state["driving"] = False
+                            draw_overlay(frozen_frame, last_faces, selected_face,
+                                         args, "selecting", None, 0.0, 0.0)
+                            cv2.putText(frozen_frame,
+                                        f"SELECTED area={selected_face.area:.4f} - press SPACE",
+                                        (8, fh - 16), cv2.FONT_HERSHEY_SIMPLEX,
+                                        0.55, (0, 165, 255), 2)
+                            web.set_state("frozen")
+                            web.set_metrics(selected_area=selected_face.area)
+                            web.update_frame(frozen_frame)
+                            print(f"Selected face area={selected_face.area:.4f}")
+
+                    if web.poll_confirm() and selected_face is not None:
+                        target_area = selected_face.area
+                        tracking = True
+                        frozen_frame = None
+                        selected_face = None
+                        web.set_state("tracking")
+                        web.set_metrics(target_area=target_area)
+                        print(f"Following started, target area={target_area:.4f}")
+
+                    if web.poll_reset():
+                        tracking = False
+                        frozen_frame = None
+                        selected_face = None
+                        target_area = None
+                        if driving:
+                            udp_sock.sendto(b"S", udp_dest)
+                            driving = False
+                            state["driving"] = False
+                        web.set_state("idle")
+                        print("Reset.")
+
+                    if web.poll_stop():
                         tracking = False
                         if driving:
                             udp_sock.sendto(b"S", udp_dest)
                             driving = False
                             state["driving"] = False
-                        # Draw selected face highlighted on frozen frame
-                        draw_overlay(frozen_frame, last_faces, selected_face,
-                                     args, False, None, 0.0, 0.0)
-                        cv2.putText(frozen_frame,
-                                    f"SELECTED area={selected_face.area:.4f} - press SPACE",
-                                    (8, fh - 16), cv2.FONT_HERSHEY_SIMPLEX,
-                                    0.55, (0, 165, 255), 2)
-                        web.set_state("frozen")
-                        web.set_metrics(selected_area=selected_face.area)
-                        web.update_frame(frozen_frame)
-                        print(f"Selected face area={selected_face.area:.4f}")
+                        web.set_state("idle")
+                        print("Stopped.")
 
-                if web.poll_confirm() and selected_face is not None:
-                    target_area = selected_face.area
-                    tracking = True
-                    args.follow = True  # auto-enable follow when area is set via UI
-                    frozen_frame = None
-                    selected_face = None
-                    web.set_state("tracking")
-                    web.set_metrics(target_area=target_area)
-                    print(f"Tracking started, target area={target_area:.4f}, follow=on")
-
-                if web.poll_reset():
-                    tracking = False
-                    frozen_frame = None
-                    selected_face = None
-                    target_area = None
-                    if driving:
-                        udp_sock.sendto(b"S", udp_dest)
-                        driving = False
-                        state["driving"] = False
-                    web.set_state("idle")
-                    print("Reset.")
-
-                if web.poll_stop():
-                    tracking = False
-                    if driving:
-                        udp_sock.sendto(b"S", udp_dest)
-                        driving = False
-                        state["driving"] = False
-                    web.set_state("idle")
-                    print("Stopped.")
-
-            # If frozen, keep serving frozen frame, skip detection/control
-            if frozen_frame is not None:
-                if args.preview:
+                # Handle preview clicks for follow mode
+                if args.preview and frozen_frame is not None:
                     cv2.imshow("Face Tracking", frozen_frame)
                     key = cv2.waitKey(1) & 0xFF
                     if key in (ord("q"), 27):
@@ -283,14 +287,14 @@ def main():
                         tracking = True
                         frozen_frame = None
                         selected_face = None
-                        print(f"Tracking started, target area={target_area:.4f}")
+                        print(f"Following started, target area={target_area:.4f}")
                     if key == ord("r"):
                         frozen_frame = None
                         selected_face = None
                         tracking = False
                         target_area = None
-                if frozen_frame is not None:
-                    continue
+                    if frozen_frame is not None:
+                        continue
 
             # --- Normal detection ---
             faces = detector.detect(frame)
@@ -305,10 +309,12 @@ def main():
                     last_seen = now
                     horiz_error = (best.cx - 0.5) / 0.5
 
+                    # Rotation (both trace and follow)
                     if abs(horiz_error) >= args.deadzone:
                         rot_magnitude = (abs(horiz_error) - args.deadzone) / (1.0 - args.deadzone)
                         rot_speed = (1.0 if horiz_error > 0 else -1.0) * clamp(rot_magnitude, 0.0, 1.0) * args.max_rot
 
+                    # Forward/back (follow only)
                     trans_speed = 0.0
                     if args.follow and target_area:
                         area_error = (target_area - best.area) / target_area
@@ -335,20 +341,31 @@ def main():
 
                 last_control = now
 
+            # --- Determine display mode ---
+            if not tracking and args.follow:
+                mode = "selecting"
+            elif tracking and args.follow and target_area:
+                mode = "following"
+            else:
+                mode = "tracing"
+
             # --- Draw overlay ---
             display = frame.copy()
             draw_overlay(display, faces, best if tracking else None, args,
-                         tracking, target_area, rot_speed, vx)
+                         mode, target_area, rot_speed, vx)
             last_display_frame = frame.copy()
 
             # --- Update web UI ---
             if web:
                 web.update_frame(display)
-                if tracking and best:
+                if mode == "following" and best:
                     web.set_state("tracking")
                     web.set_metrics(current_area=best.area, target_area=target_area or 0,
                                     rot_speed=rot_speed, vx=vx)
-                elif tracking:
+                elif mode == "tracing" and best:
+                    web.set_state("tracking")
+                    web.set_metrics(rot_speed=rot_speed)
+                elif tracking and not best:
                     web.set_state("lost")
                 elif not frozen_frame:
                     web.set_state("idle")

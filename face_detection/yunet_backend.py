@@ -9,6 +9,7 @@ Tiny model (~220KB), very fast on CPU and GPU, zero extra pip deps.
 import os
 
 import cv2
+import numpy as np
 
 from .base import FaceDetector, Detection
 
@@ -26,24 +27,31 @@ class YuNetFaceDetector(FaceDetector):
                 "  wget https://github.com/opencv/opencv_zoo/raw/main/models/"
                 "face_detection_yunet/face_detection_yunet_2023mar.onnx"
             )
-        # Auto-select backend: prefer CUDA if available
-        if backend_id is None:
-            backend_id = cv2.dnn.DNN_BACKEND_CUDA
-        if target_id is None:
-            target_id = cv2.dnn.DNN_TARGET_CUDA
-        try:
-            self._det = cv2.FaceDetectorYN.create(
-                model_path, "", (320, 320),
-                score_threshold=score_threshold,
-                backend_id=backend_id,
-                target_id=target_id,
-            )
-        except cv2.error:
-            # Fall back to default CPU backend
-            self._det = cv2.FaceDetectorYN.create(
-                model_path, "", (320, 320),
-                score_threshold=score_threshold,
-            )
+        # Try backends in order: caller-specified, then CUDA, then CPU
+        attempts = []
+        if backend_id is not None and target_id is not None:
+            attempts.append((backend_id, target_id, "custom"))
+        attempts.append((cv2.dnn.DNN_BACKEND_CUDA, cv2.dnn.DNN_TARGET_CUDA, "CUDA"))
+        attempts.append((cv2.dnn.DNN_BACKEND_DEFAULT, cv2.dnn.DNN_TARGET_CPU, "CPU"))
+
+        for bid, tid, label in attempts:
+            try:
+                det = cv2.FaceDetectorYN.create(
+                    model_path, "", (320, 320),
+                    score_threshold=score_threshold,
+                    backend_id=bid,
+                    target_id=tid,
+                )
+                # Test with a dummy frame to confirm it actually works
+                dummy = np.zeros((320, 320, 3), dtype=np.uint8)
+                det.setInputSize((320, 320))
+                det.detect(dummy)
+                self._det = det
+                print(f"[yunet] Using {label} backend")
+                return
+            except cv2.error:
+                continue
+        raise RuntimeError("YuNet: no working DNN backend found")
 
     def detect(self, frame_bgr):
         h, w = frame_bgr.shape[:2]

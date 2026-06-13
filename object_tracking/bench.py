@@ -41,9 +41,15 @@ BENCH_HTML = """<!DOCTYPE html>
   * { margin: 0; padding: 0; box-sizing: border-box; }
   body { background: #111; color: #eee; font-family: monospace;
          display: flex; flex-direction: column; align-items: center; }
-  #feed { cursor: crosshair; border: 2px solid #333; margin-top: 10px;
-          user-select: none; -webkit-user-select: none; }
-  #feed.tracking { border-color: #0f0; }
+  #wrapper { position: relative; margin-top: 10px; width: 640px; height: 480px;
+             border: 2px solid #333; cursor: crosshair; }
+  #wrapper.tracking { border-color: #0f0; }
+  #wrapper.frozen { border-color: #f80; }
+  #feed { width: 100%; height: 100%; display: block; }
+  #overlay { position: absolute; top: 0; left: 0; width: 100%; height: 100%;
+             pointer-events: none; }
+  #snapshot { position: absolute; top: 0; left: 0; width: 100%; height: 100%;
+              display: none; }
   #ref-container { margin-top: 8px; display: flex; align-items: center; gap: 12px; }
   #ref-img { border: 2px solid #555; display: none; }
   #status { margin-top: 8px; font-size: 16px; min-height: 24px; }
@@ -53,45 +59,131 @@ BENCH_HTML = """<!DOCTYPE html>
 </style>
 </head>
 <body>
-  <img id="feed" src="/stream" width="640" height="480" />
+  <div id="wrapper">
+    <img id="feed" src="/stream" />
+    <canvas id="snapshot"></canvas>
+    <canvas id="overlay"></canvas>
+  </div>
   <div id="ref-container">
     <span>Reference:</span>
     <img id="ref-img" height="80" />
     <span id="ref-status">Drag on feed to select target</span>
   </div>
   <div id="status">Waiting...</div>
-  <div id="help">Click+drag to select &bull; R to reset &bull; Upload: drag image onto page</div>
-  <canvas id="crop-canvas" style="display:none"></canvas>
+  <div id="help">Click+drag to select &bull; SPACE to confirm &bull; ESC to cancel &bull; R to reset</div>
 <script>
+const wrapper = document.getElementById('wrapper');
 const feed = document.getElementById('feed');
+const snapshot = document.getElementById('snapshot');
+const overlayCanvas = document.getElementById('overlay');
+const ctx = overlayCanvas.getContext('2d');
 const refImg = document.getElementById('ref-img');
 const refStatus = document.getElementById('ref-status');
-const status = document.getElementById('status');
-let startX = 0, startY = 0, dragging = false;
+const statusEl = document.getElementById('status');
 
-feed.addEventListener('mousedown', (e) => {
-  const rect = feed.getBoundingClientRect();
+overlayCanvas.width = 640; overlayCanvas.height = 480;
+snapshot.width = 640; snapshot.height = 480;
+
+let startX = 0, startY = 0, curX = 0, curY = 0;
+let dragging = false, frozen = false;
+let selX1 = 0, selY1 = 0, selX2 = 0, selY2 = 0, hasSelection = false;
+
+function freezeFeed() {
+  // Capture current feed frame to snapshot canvas
+  const sctx = snapshot.getContext('2d');
+  sctx.drawImage(feed, 0, 0, 640, 480);
+  snapshot.style.display = 'block';
+  feed.style.display = 'none';
+  frozen = true;
+  wrapper.className = 'frozen';
+  // Tell server to freeze
+  fetch('/freeze');
+}
+
+function unfreezeFeed() {
+  snapshot.style.display = 'none';
+  feed.style.display = 'block';
+  frozen = false;
+  hasSelection = false;
+  ctx.clearRect(0, 0, 640, 480);
+  wrapper.className = '';
+  fetch('/unfreeze');
+}
+
+function drawRect(x1, y1, x2, y2) {
+  ctx.clearRect(0, 0, 640, 480);
+  ctx.strokeStyle = '#ff8800';
+  ctx.lineWidth = 2;
+  ctx.setLineDash([6, 3]);
+  ctx.strokeRect(x1 * 640, y1 * 480, (x2 - x1) * 640, (y2 - y1) * 480);
+  ctx.setLineDash([]);
+  // Dim outside selection
+  ctx.fillStyle = 'rgba(0,0,0,0.4)';
+  ctx.fillRect(0, 0, 640, y1 * 480);
+  ctx.fillRect(0, y2 * 480, 640, 480 - y2 * 480);
+  ctx.fillRect(0, y1 * 480, x1 * 640, (y2 - y1) * 480);
+  ctx.fillRect(x2 * 640, y1 * 480, 640 - x2 * 640, (y2 - y1) * 480);
+}
+
+wrapper.addEventListener('mousedown', (e) => {
+  e.preventDefault();
+  if (!frozen) freezeFeed();
+  const rect = wrapper.getBoundingClientRect();
   startX = (e.clientX - rect.left) / rect.width;
   startY = (e.clientY - rect.top) / rect.height;
   dragging = true;
+  hasSelection = false;
 });
 
-feed.addEventListener('mouseup', (e) => {
+wrapper.addEventListener('mousemove', (e) => {
+  if (!dragging) return;
+  const rect = wrapper.getBoundingClientRect();
+  curX = (e.clientX - rect.left) / rect.width;
+  curY = (e.clientY - rect.top) / rect.height;
+  const x1 = Math.max(0, Math.min(startX, curX));
+  const y1 = Math.max(0, Math.min(startY, curY));
+  const x2 = Math.min(1, Math.max(startX, curX));
+  const y2 = Math.min(1, Math.max(startY, curY));
+  drawRect(x1, y1, x2, y2);
+});
+
+wrapper.addEventListener('mouseup', (e) => {
   if (!dragging) return;
   dragging = false;
-  const rect = feed.getBoundingClientRect();
+  const rect = wrapper.getBoundingClientRect();
   const endX = (e.clientX - rect.left) / rect.width;
   const endY = (e.clientY - rect.top) / rect.height;
-  const x1 = Math.min(startX, endX), y1 = Math.min(startY, endY);
-  const x2 = Math.max(startX, endX), y2 = Math.max(startY, endY);
-  if (x2 - x1 < 0.02 || y2 - y1 < 0.02) return;
-  fetch('/crop?x1='+x1.toFixed(4)+'&y1='+y1.toFixed(4)+
-        '&x2='+x2.toFixed(4)+'&y2='+y2.toFixed(4));
-  refStatus.textContent = 'Setting reference...';
+  selX1 = Math.max(0, Math.min(startX, endX));
+  selY1 = Math.max(0, Math.min(startY, endY));
+  selX2 = Math.min(1, Math.max(startX, endX));
+  selY2 = Math.min(1, Math.max(startY, endY));
+  if (selX2 - selX1 < 0.02 || selY2 - selY1 < 0.02) {
+    unfreezeFeed();
+    return;
+  }
+  hasSelection = true;
+  drawRect(selX1, selY1, selX2, selY2);
+  refStatus.textContent = 'Press SPACE to confirm, ESC to cancel';
 });
 
+// Make overlay receive pointer events when frozen
+overlayCanvas.style.pointerEvents = 'auto';
+
 document.addEventListener('keydown', (e) => {
-  if (e.code === 'KeyR') fetch('/reset');
+  if (e.code === 'Space' && hasSelection) {
+    e.preventDefault();
+    fetch('/crop?x1='+selX1.toFixed(4)+'&y1='+selY1.toFixed(4)+
+          '&x2='+selX2.toFixed(4)+'&y2='+selY2.toFixed(4));
+    refStatus.textContent = 'Setting reference...';
+    unfreezeFeed();
+  }
+  if (e.code === 'Escape' && frozen) {
+    unfreezeFeed();
+  }
+  if (e.code === 'KeyR') {
+    if (frozen) unfreezeFeed();
+    fetch('/reset');
+  }
 });
 
 // drag-and-drop image file
@@ -114,11 +206,11 @@ setInterval(async () => {
       refImg.src = '/ref_image?' + Date.now();
       refImg.style.display = 'inline';
       refStatus.textContent = '';
-      feed.className = 'tracking';
+      if (!frozen) wrapper.className = 'tracking';
     } else {
       refImg.style.display = 'none';
-      refStatus.textContent = 'Drag on feed to select target';
-      feed.className = '';
+      if (!frozen) refStatus.textContent = 'Drag on feed to select target';
+      if (!frozen) wrapper.className = '';
     }
     if (s.matched) {
       status.innerHTML = s.backend + ' | <span class="val">' +
@@ -148,6 +240,8 @@ class BenchServer:
         self._crop = None       # (x1, y1, x2, y2) normalized
         self._upload = None     # raw image bytes
         self._reset = False
+        self._frozen = False
+        self._frozen_frame = None  # raw BGR frame at freeze time
         self._has_ref = False
         self._matched = False
         self._latency_ms = 0.0
@@ -200,9 +294,26 @@ class BenchServer:
                     self.end_headers()
                     self.wfile.write(b"ok")
 
+                elif path == "/freeze":
+                    with parent._lock:
+                        parent._frozen = True
+                    self.send_response(200)
+                    self.end_headers()
+                    self.wfile.write(b"ok")
+
+                elif path == "/unfreeze":
+                    with parent._lock:
+                        parent._frozen = False
+                        parent._frozen_frame = None
+                    self.send_response(200)
+                    self.end_headers()
+                    self.wfile.write(b"ok")
+
                 elif path == "/reset":
                     with parent._lock:
                         parent._reset = True
+                        parent._frozen = False
+                        parent._frozen_frame = None
                     self.send_response(200)
                     self.end_headers()
                     self.wfile.write(b"ok")
@@ -272,6 +383,10 @@ class BenchServer:
         self._thread.start()
 
     def update_frame(self, frame_bgr):
+        with self._lock:
+            # Capture the raw frame when freeze is requested
+            if self._frozen and self._frozen_frame is None:
+                self._frozen_frame = frame_bgr.copy()
         _, jpg = cv2.imencode(".jpg", frame_bgr,
                               [cv2.IMWRITE_JPEG_QUALITY, 70])
         with self._lock:
@@ -310,6 +425,15 @@ class BenchServer:
             r = self._reset
             self._reset = False
         return r
+
+    def is_frozen(self):
+        with self._lock:
+            return self._frozen
+
+    def get_frozen_frame(self):
+        """Return the raw BGR frame captured at freeze time."""
+        with self._lock:
+            return self._frozen_frame.copy() if self._frozen_frame is not None else None
 
     def clear_ref(self):
         with self._lock:
@@ -387,16 +511,21 @@ def main():
 
             fh, fw = frame.shape[:2]
 
-            # Handle crop from web UI
+            # Handle crop from web UI — use the frozen frame
             if server:
                 crop = server.poll_crop()
                 if crop:
                     x1, y1, x2, y2 = crop
-                    px1 = max(0, int(x1 * fw))
-                    py1 = max(0, int(y1 * fh))
-                    px2 = min(fw, int(x2 * fw))
-                    py2 = min(fh, int(y2 * fh))
-                    ref_img = frame[py1:py2, px1:px2].copy()
+                    # Crop from the frozen frame (what the user actually saw)
+                    crop_source = server.get_frozen_frame()
+                    if crop_source is None:
+                        crop_source = frame
+                    ch, cw = crop_source.shape[:2]
+                    px1 = max(0, int(x1 * cw))
+                    py1 = max(0, int(y1 * ch))
+                    px2 = min(cw, int(x2 * cw))
+                    py2 = min(ch, int(y2 * ch))
+                    ref_img = crop_source[py1:py2, px1:px2].copy()
                     if ref_img.size > 0:
                         matcher.set_reference(ref_img)
                         has_ref = True

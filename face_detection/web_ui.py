@@ -9,6 +9,7 @@ import json
 import threading
 import time
 from http.server import HTTPServer, BaseHTTPRequestHandler
+from socketserver import ThreadingMixIn
 from urllib.parse import urlparse, parse_qs
 
 import cv2
@@ -184,7 +185,10 @@ class WebUI:
             def log_message(self, *args):
                 pass
 
-        self._server = HTTPServer(("0.0.0.0", port), Handler)
+        class ThreadedHTTPServer(ThreadingMixIn, HTTPServer):
+            daemon_threads = True
+
+        self._server = ThreadedHTTPServer(("0.0.0.0", port), Handler)
         self._thread = threading.Thread(target=self._server.serve_forever,
                                         daemon=True)
         self._thread.start()

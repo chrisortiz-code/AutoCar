@@ -288,7 +288,8 @@ def main():
                         selected_face = None
                         tracking = False
                         target_area = None
-                continue
+                if frozen_frame is not None:
+                    continue
 
             # --- Normal detection ---
             faces = detector.detect(frame)

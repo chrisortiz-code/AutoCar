@@ -243,11 +243,12 @@ def main():
                 if web.poll_confirm() and selected_face is not None:
                     target_area = selected_face.area
                     tracking = True
+                    args.follow = True  # auto-enable follow when area is set via UI
                     frozen_frame = None
                     selected_face = None
                     web.set_state("tracking")
                     web.set_metrics(target_area=target_area)
-                    print(f"Tracking started, target area={target_area:.4f}")
+                    print(f"Tracking started, target area={target_area:.4f}, follow=on")
 
                 if web.poll_reset():
                     tracking = False

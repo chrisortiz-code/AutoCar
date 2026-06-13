@@ -2,7 +2,7 @@
 Face-tracking controller — rotates the robot to keep a detected face centered,
 and optionally drives forward/backward to maintain distance.
 
-Uses MediaPipe Face Detection for lightweight, real-time face tracking.
+Uses the pluggable face_detection framework — any backend works.
 Sends commands via the same UDP protocol as cam_jetson_controller.py
 (requires universal_receiver.py to be running).
 
@@ -10,9 +10,10 @@ Horizontal centering is always handled by rotation (rot_speed).
 Forward/backward is opt-in via --follow, using face bounding-box area.
 
 Usage:
-    python face_follow_controller.py --preview
-    python face_follow_controller.py --follow --preview
-    python face_follow_controller.py --follow --target-area 0.08 --max-range-speed 3.0
+    python face_follow_controller.py --backend mediapipe --preview
+    python face_follow_controller.py --backend yolo --model yolov8n-face.pt --preview
+    python face_follow_controller.py --backend yunet --model face_detection_yunet_2023mar.onnx
+    python face_follow_controller.py --backend scrfd --follow --preview
 """
 
 import argparse
@@ -22,11 +23,14 @@ import platform
 import signal
 import socket
 import struct
+import sys
 import time
 
 import cv2
-import mediapipe as mp
 from dotenv import load_dotenv
+
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
+from face_detection import create_detector, BACKENDS
 
 load_dotenv(os.path.join(os.path.dirname(__file__), '..', '.env'))
 
@@ -43,6 +47,10 @@ DEFAULT_UDP_PORT = int(os.getenv("UDP_PORT", "5555"))
 
 def parse_args():
     parser = argparse.ArgumentParser(description="Face-tracking rotation controller")
+    parser.add_argument("--backend", default="mediapipe", choices=BACKENDS.keys(),
+                        help="Face detection backend")
+    parser.add_argument("--model", default=None,
+                        help="Path to model file (backend-specific)")
     parser.add_argument("--camera", type=int, default=0, help="OpenCV camera index")
     parser.add_argument("--host", default=DEFAULT_UDP_HOST, help="UDP receiver host")
     parser.add_argument("--port", type=int, default=DEFAULT_UDP_PORT, help="UDP receiver port")
@@ -53,7 +61,6 @@ def parse_args():
     parser.add_argument("--area-deadzone", type=float, default=AREA_DEADZONE, help="Accepted area error before fwd/back correction (requires --follow)")
     parser.add_argument("--area-gain", type=float, default=AREA_GAIN, help="Area error that maps to full fwd/back command (requires --follow)")
     parser.add_argument("--target-area", type=float, default=None, help="Target face bbox area as fraction of frame (0..1). Auto-captured on first detection if omitted.")
-    parser.add_argument("--detect-width", type=int, default=320, help="Downscale frame to this width for detection (lower = faster)")
     parser.add_argument("--preview", action="store_true", help="Show OpenCV window with detection overlay")
     return parser.parse_args()
 
@@ -64,7 +71,8 @@ def clamp(value, low, high):
 
 def main():
     args = parse_args()
-    state = {"cap": None, "udp_sock": None, "driving": False, "cleaned": False}
+    state = {"cap": None, "udp_sock": None, "driving": False, "cleaned": False,
+             "detector": None}
     udp_dest = (args.host, args.port)
 
     def cleanup():
@@ -73,6 +81,8 @@ def main():
         state["cleaned"] = True
         if state["driving"] and state["udp_sock"]:
             state["udp_sock"].sendto(b"S", udp_dest)
+        if state["detector"]:
+            state["detector"].close()
         if state["cap"]:
             state["cap"].release()
         if args.preview:
@@ -88,6 +98,15 @@ def main():
     signal.signal(signal.SIGINT, handle_signal)
     signal.signal(signal.SIGTERM, handle_signal)
 
+    # Create detector
+    det_kwargs = {}
+    if args.model:
+        det_kwargs["model_path"] = args.model
+    print(f"Loading backend: {args.backend}")
+    detector = create_detector(args.backend, **det_kwargs)
+    state["detector"] = detector
+    print(f"Backend ready: {detector.name}")
+
     if platform.system() == "Linux":
         cap = cv2.VideoCapture(args.camera, cv2.CAP_V4L2)
     else:
@@ -100,9 +119,6 @@ def main():
     udp_sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     state["udp_sock"] = udp_sock
     print(f"UDP control -> {args.host}:{args.port}")
-
-    mp_face = mp.solutions.face_detection
-    face_detection = mp_face.FaceDetection(model_selection=0, min_detection_confidence=0.5)
 
     if args.preview:
         cv2.namedWindow("Face Tracking")
@@ -127,30 +143,18 @@ def main():
             fh, fw = frame.shape[:2]
             now = time.time()
 
-            # Downscale for faster inference — coords are relative so they still apply
-            scale = args.detect_width / fw
-            small = cv2.resize(frame, (args.detect_width, int(fh * scale)), interpolation=cv2.INTER_AREA)
-            rgb_frame = cv2.cvtColor(small, cv2.COLOR_BGR2RGB)
-            results = face_detection.process(rgb_frame)
+            # Detect faces using the selected backend
+            faces = detector.detect(frame)
 
-            face_center_x = None
-            best_box = None
-
-            if results.detections:
-                largest_area = 0
-                for detection in results.detections:
-                    bbox = detection.location_data.relative_bounding_box
-                    area = bbox.width * bbox.height
-                    if area > largest_area:
-                        largest_area = area
-                        face_center_x = (bbox.xmin + bbox.width / 2)
-                        best_box = bbox
+            # Pick the largest face (closest)
+            best = None
+            if faces:
+                best = max(faces, key=lambda f: f.area)
 
             if now - last_control >= interval:
-                if face_center_x is not None:
+                if best is not None:
                     last_seen = now
-                    horiz_error = (face_center_x - 0.5) / 0.5  # -1..+1
-                    face_area = best_box.width * best_box.height
+                    horiz_error = (best.cx - 0.5) / 0.5  # -1..+1
 
                     # Rotation from horizontal error
                     rot_speed = 0.0
@@ -162,10 +166,11 @@ def main():
                     vx = 0.0
                     trans_speed = 0.0
                     if args.follow:
+                        face_area = best.area
                         if target_area is None:
                             target_area = face_area
                             print(f"Target area captured: {target_area:.4f}")
-                        area_error = (target_area - face_area) / target_area  # +ve = too far, -ve = too close
+                        area_error = (target_area - face_area) / target_area
                         if abs(area_error) >= args.area_deadzone:
                             range_mag = (abs(area_error) - args.area_deadzone) / max(0.01, args.area_gain)
                             vx = (1.0 if area_error > 0 else -1.0) * clamp(range_mag, 0.0, 1.0)
@@ -190,14 +195,14 @@ def main():
                 last_control = now
 
             if args.preview:
-                if best_box is not None:
-                    x1 = int(best_box.xmin * fw)
-                    y1 = int(best_box.ymin * fh)
-                    x2 = int((best_box.xmin + best_box.width) * fw)
-                    y2 = int((best_box.ymin + best_box.height) * fh)
+                if best is not None:
+                    x1 = int((best.cx - best.w / 2) * fw)
+                    y1 = int((best.cy - best.h / 2) * fh)
+                    x2 = int((best.cx + best.w / 2) * fw)
+                    y2 = int((best.cy + best.h / 2) * fh)
                     cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 255, 0), 2)
-                    cx = int(face_center_x * fw)
-                    cy = (y1 + y2) // 2
+                    cx = int(best.cx * fw)
+                    cy = int(best.cy * fh)
                     cv2.circle(frame, (cx, cy), 5, (0, 255, 0), -1)
 
                 center_x = fw // 2
@@ -206,14 +211,13 @@ def main():
                 cv2.line(frame, (center_x - dz_px, 0), (center_x - dz_px, fh), (50, 50, 50), 1)
                 cv2.line(frame, (center_x + dz_px, 0), (center_x + dz_px, fh), (50, 50, 50), 1)
 
-                if face_center_x is not None:
-                    error = (face_center_x - 0.5) / 0.5
-                    status = f"rot={error:+.2f}"
+                if best is not None:
+                    error = (best.cx - 0.5) / 0.5
+                    status = f"[{args.backend}] rot={error:+.2f}"
                     if abs(error) < args.deadzone:
                         status += " CENTERED"
                     if args.follow and target_area is not None:
-                        face_area = best_box.width * best_box.height
-                        area_err = (target_area - face_area) / target_area
+                        area_err = (target_area - best.area) / target_area
                         status += f"  area={area_err:+.2f}"
                     color = (0, 255, 0)
                 elif driving:

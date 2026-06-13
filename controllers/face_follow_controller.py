@@ -9,11 +9,14 @@ Sends commands via the same UDP protocol as cam_jetson_controller.py
 Horizontal centering is always handled by rotation (rot_speed).
 Forward/backward is opt-in via --follow, using face bounding-box area.
 
+Display modes:
+  --preview    OpenCV window (local/X11)
+  --stream     Web UI at http://<jetson-ip>:8090 — click face, space to track
+
 Usage:
+    python face_follow_controller.py --backend mediapipe --stream
+    python face_follow_controller.py --backend yolo --model yolov8n-face.pt --stream --follow
     python face_follow_controller.py --backend mediapipe --preview
-    python face_follow_controller.py --backend yolo --model yolov8n-face.pt --preview
-    python face_follow_controller.py --backend yunet --model face_detection_yunet_2023mar.onnx
-    python face_follow_controller.py --backend scrfd --follow --preview
 """
 
 import argparse
@@ -57,11 +60,12 @@ def parse_args():
     parser.add_argument("--max-rot", type=float, default=MAX_ROT_SPEED, help="Max rotation speed in turns/s")
     parser.add_argument("--deadzone", type=float, default=DEADZONE, help="Center deadzone as fraction of half-width")
     parser.add_argument("--follow", action="store_true", help="Enable forward/backward driving to maintain distance")
-    parser.add_argument("--max-range-speed", type=float, default=MAX_RANGE_SPEED, help="Max forward/back speed in turns/s (requires --follow)")
-    parser.add_argument("--area-deadzone", type=float, default=AREA_DEADZONE, help="Accepted area error before fwd/back correction (requires --follow)")
-    parser.add_argument("--area-gain", type=float, default=AREA_GAIN, help="Area error that maps to full fwd/back command (requires --follow)")
-    parser.add_argument("--target-area", type=float, default=None, help="Target face bbox area as fraction of frame (0..1). Auto-captured on first detection if omitted.")
-    parser.add_argument("--preview", action="store_true", help="Show OpenCV window with detection overlay")
+    parser.add_argument("--max-range-speed", type=float, default=MAX_RANGE_SPEED, help="Max forward/back speed in turns/s")
+    parser.add_argument("--area-deadzone", type=float, default=AREA_DEADZONE, help="Accepted area error before fwd/back correction")
+    parser.add_argument("--area-gain", type=float, default=AREA_GAIN, help="Area error that maps to full fwd/back command")
+    parser.add_argument("--preview", action="store_true", help="OpenCV window (local display)")
+    parser.add_argument("--stream", action="store_true", help="Web UI with MJPEG stream (open in browser)")
+    parser.add_argument("--stream-port", type=int, default=8090, help="Port for web UI")
     return parser.parse_args()
 
 
@@ -69,10 +73,56 @@ def clamp(value, low, high):
     return max(low, min(high, value))
 
 
+def draw_overlay(frame, faces, best, args, tracking, target_area, rot_speed, vx):
+    """Draw bounding boxes and status on frame."""
+    fh, fw = frame.shape[:2]
+
+    for f in faces:
+        x1 = int((f.cx - f.w / 2) * fw)
+        y1 = int((f.cy - f.h / 2) * fh)
+        x2 = int((f.cx + f.w / 2) * fw)
+        y2 = int((f.cy + f.h / 2) * fh)
+        is_best = (best is not None and f is best)
+        color = (0, 255, 0) if is_best else (100, 100, 100)
+        cv2.rectangle(frame, (x1, y1), (x2, y2), color, 2)
+        label = f"{f.confidence:.0%} a={f.area:.4f}"
+        cv2.putText(frame, label, (x1, max(y1 - 6, 14)),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.45, color, 1)
+
+    # Deadzone lines
+    center_x = fw // 2
+    dz_px = int(fw * args.deadzone / 2)
+    cv2.line(frame, (center_x, 0), (center_x, fh), (50, 50, 50), 1)
+    cv2.line(frame, (center_x - dz_px, 0), (center_x - dz_px, fh), (50, 50, 50), 1)
+    cv2.line(frame, (center_x + dz_px, 0), (center_x + dz_px, fh), (50, 50, 50), 1)
+
+    # Status text
+    if tracking and best is not None:
+        error = (best.cx - 0.5) / 0.5
+        status = f"TRACKING rot={rot_speed:+.2f}"
+        if args.follow and target_area:
+            area_err = (target_area - best.area) / target_area
+            status += f"  area_err={area_err:+.2f}  vx={vx:+.2f}"
+        cv2.putText(frame, status, (8, 24), cv2.FONT_HERSHEY_SIMPLEX, 0.55, (0, 255, 0), 2)
+    elif tracking:
+        cv2.putText(frame, "FACE LOST", (8, 24), cv2.FONT_HERSHEY_SIMPLEX, 0.55, (0, 0, 255), 2)
+    else:
+        cv2.putText(frame, "Click face to select", (8, 24),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.55, (0, 200, 255), 2)
+
+
+def find_nearest_face(faces, click_x, click_y):
+    """Find the face whose center is nearest to the click point."""
+    if not faces:
+        return None
+    return min(faces, key=lambda f: (f.cx - click_x) ** 2 + (f.cy - click_y) ** 2)
+
+
 def main():
     args = parse_args()
+    web = None
     state = {"cap": None, "udp_sock": None, "driving": False, "cleaned": False,
-             "detector": None}
+             "detector": None, "web": None}
     udp_dest = (args.host, args.port)
 
     def cleanup():
@@ -87,6 +137,8 @@ def main():
             state["cap"].release()
         if args.preview:
             cv2.destroyAllWindows()
+        if state["web"]:
+            state["web"].stop()
         if state["udp_sock"]:
             state["udp_sock"].close()
 
@@ -120,18 +172,30 @@ def main():
     state["udp_sock"] = udp_sock
     print(f"UDP control -> {args.host}:{args.port}")
 
+    # Web UI
+    if args.stream:
+        from face_detection.web_ui import WebUI
+        web = WebUI(port=args.stream_port)
+        state["web"] = web
+        print(f"Web UI at http://0.0.0.0:{args.stream_port}")
+
     if args.preview:
         cv2.namedWindow("Face Tracking")
 
     if args.follow:
         print("Follow mode ON — will drive fwd/back to maintain distance.")
-    print("Face tracking active. Press Q/ESC to quit." if args.preview else "Face tracking active. Ctrl+C to stop.")
+    print("Ctrl+C to stop.")
 
     interval = 1.0 / CONTROL_HZ
     last_control = 0.0
     last_seen = 0.0
     driving = False
-    target_area = args.target_area
+    tracking = False
+    target_area = None
+    frozen_frame = None
+    selected_face = None
+    rot_speed = 0.0
+    vx = 0.0
 
     try:
         while True:
@@ -143,34 +207,102 @@ def main():
             fh, fw = frame.shape[:2]
             now = time.time()
 
-            # Detect faces using the selected backend
+            # --- Handle web UI commands ---
+            if web:
+                click = web.poll_click()
+                if click is not None:
+                    # Freeze current frame, find nearest face to click
+                    cx, cy = click
+                    faces = detector.detect(frame)
+                    selected_face = find_nearest_face(faces, cx, cy)
+                    if selected_face:
+                        frozen_frame = frame.copy()
+                        tracking = False
+                        if driving:
+                            udp_sock.sendto(b"S", udp_dest)
+                            driving = False
+                            state["driving"] = False
+                        # Draw selected face on frozen frame
+                        draw_overlay(frozen_frame, faces, selected_face, args,
+                                     False, None, 0.0, 0.0)
+                        cv2.putText(frozen_frame,
+                                    f"SELECTED area={selected_face.area:.4f} - press SPACE",
+                                    (8, fh - 16), cv2.FONT_HERSHEY_SIMPLEX,
+                                    0.55, (0, 165, 255), 2)
+                        web.set_state("frozen")
+                        web.set_metrics(selected_area=selected_face.area)
+                        web.update_frame(frozen_frame)
+                        print(f"Selected face area={selected_face.area:.4f}")
+
+                if web.poll_confirm() and selected_face is not None:
+                    target_area = selected_face.area
+                    tracking = True
+                    frozen_frame = None
+                    selected_face = None
+                    web.set_state("tracking")
+                    web.set_metrics(target_area=target_area)
+                    print(f"Tracking started, target area={target_area:.4f}")
+
+                if web.poll_reset():
+                    tracking = False
+                    frozen_frame = None
+                    selected_face = None
+                    target_area = None
+                    if driving:
+                        udp_sock.sendto(b"S", udp_dest)
+                        driving = False
+                        state["driving"] = False
+                    web.set_state("idle")
+                    print("Reset.")
+
+                if web.poll_stop():
+                    tracking = False
+                    if driving:
+                        udp_sock.sendto(b"S", udp_dest)
+                        driving = False
+                        state["driving"] = False
+                    web.set_state("idle")
+                    print("Stopped.")
+
+            # If frozen, keep serving frozen frame, skip detection/control
+            if frozen_frame is not None:
+                if args.preview:
+                    cv2.imshow("Face Tracking", frozen_frame)
+                    key = cv2.waitKey(1) & 0xFF
+                    if key in (ord("q"), 27):
+                        break
+                    if key == ord(" ") and selected_face is not None:
+                        target_area = selected_face.area
+                        tracking = True
+                        frozen_frame = None
+                        selected_face = None
+                        print(f"Tracking started, target area={target_area:.4f}")
+                    if key == ord("r"):
+                        frozen_frame = None
+                        selected_face = None
+                        tracking = False
+                        target_area = None
+                continue
+
+            # --- Normal detection ---
             faces = detector.detect(frame)
+            best = max(faces, key=lambda f: f.area) if faces else None
 
-            # Pick the largest face (closest)
-            best = None
-            if faces:
-                best = max(faces, key=lambda f: f.area)
-
-            if now - last_control >= interval:
+            # --- Control loop ---
+            rot_speed = 0.0
+            vx = 0.0
+            if tracking and now - last_control >= interval:
                 if best is not None:
                     last_seen = now
-                    horiz_error = (best.cx - 0.5) / 0.5  # -1..+1
+                    horiz_error = (best.cx - 0.5) / 0.5
 
-                    # Rotation from horizontal error
-                    rot_speed = 0.0
                     if abs(horiz_error) >= args.deadzone:
                         rot_magnitude = (abs(horiz_error) - args.deadzone) / (1.0 - args.deadzone)
                         rot_speed = (1.0 if horiz_error > 0 else -1.0) * clamp(rot_magnitude, 0.0, 1.0) * args.max_rot
 
-                    # Forward/back from area error (only with --follow)
-                    vx = 0.0
                     trans_speed = 0.0
-                    if args.follow:
-                        face_area = best.area
-                        if target_area is None:
-                            target_area = face_area
-                            print(f"Target area captured: {target_area:.4f}")
-                        area_error = (target_area - face_area) / target_area
+                    if args.follow and target_area:
+                        area_error = (target_area - best.area) / target_area
                         if abs(area_error) >= args.area_deadzone:
                             range_mag = (abs(area_error) - args.area_deadzone) / max(0.01, args.area_gain)
                             vx = (1.0 if area_error > 0 else -1.0) * clamp(range_mag, 0.0, 1.0)
@@ -194,41 +326,26 @@ def main():
 
                 last_control = now
 
+            # --- Draw overlay ---
+            display = frame.copy()
+            draw_overlay(display, faces, best if tracking else None, args,
+                         tracking, target_area, rot_speed, vx)
+
+            # --- Update web UI ---
+            if web:
+                web.update_frame(display)
+                if tracking and best:
+                    web.set_state("tracking")
+                    web.set_metrics(current_area=best.area, target_area=target_area or 0,
+                                    rot_speed=rot_speed, vx=vx)
+                elif tracking:
+                    web.set_state("lost")
+                elif not frozen_frame:
+                    web.set_state("idle")
+
+            # --- OpenCV preview ---
             if args.preview:
-                if best is not None:
-                    x1 = int((best.cx - best.w / 2) * fw)
-                    y1 = int((best.cy - best.h / 2) * fh)
-                    x2 = int((best.cx + best.w / 2) * fw)
-                    y2 = int((best.cy + best.h / 2) * fh)
-                    cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 255, 0), 2)
-                    cx = int(best.cx * fw)
-                    cy = int(best.cy * fh)
-                    cv2.circle(frame, (cx, cy), 5, (0, 255, 0), -1)
-
-                center_x = fw // 2
-                dz_px = int(fw * args.deadzone / 2)
-                cv2.line(frame, (center_x, 0), (center_x, fh), (50, 50, 50), 1)
-                cv2.line(frame, (center_x - dz_px, 0), (center_x - dz_px, fh), (50, 50, 50), 1)
-                cv2.line(frame, (center_x + dz_px, 0), (center_x + dz_px, fh), (50, 50, 50), 1)
-
-                if best is not None:
-                    error = (best.cx - 0.5) / 0.5
-                    status = f"[{args.backend}] rot={error:+.2f}"
-                    if abs(error) < args.deadzone:
-                        status += " CENTERED"
-                    if args.follow and target_area is not None:
-                        area_err = (target_area - best.area) / target_area
-                        status += f"  area={area_err:+.2f}"
-                    color = (0, 255, 0)
-                elif driving:
-                    status = "FACE LOST (coasting)"
-                    color = (0, 165, 255)
-                else:
-                    status = "NO FACE"
-                    color = (0, 0, 255)
-                cv2.putText(frame, status, (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.7, color, 2)
-
-                cv2.imshow("Face Tracking", frame)
+                cv2.imshow("Face Tracking", display)
                 key = cv2.waitKey(1) & 0xFF
                 if key in (ord("q"), 27):
                     break

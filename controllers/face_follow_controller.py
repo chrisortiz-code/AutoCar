@@ -196,6 +196,8 @@ def main():
     selected_face = None
     rot_speed = 0.0
     vx = 0.0
+    last_faces = []
+    last_display_frame = None
 
     try:
         while True:
@@ -211,20 +213,24 @@ def main():
             if web:
                 click = web.poll_click()
                 if click is not None:
-                    # Freeze current frame, find nearest face to click
+                    # Use faces from the last displayed frame, not a new detection
                     cx, cy = click
-                    faces = detector.detect(frame)
-                    selected_face = find_nearest_face(faces, cx, cy)
+                    selected_face = find_nearest_face(last_faces, cx, cy)
+                    print(f"Click at ({cx:.2f}, {cy:.2f}), "
+                          f"{len(last_faces)} faces available, "
+                          f"selected={'yes' if selected_face else 'no'}")
                     if selected_face:
-                        frozen_frame = frame.copy()
+                        frozen_frame = (last_display_frame.copy()
+                                        if last_display_frame is not None
+                                        else frame.copy())
                         tracking = False
                         if driving:
                             udp_sock.sendto(b"S", udp_dest)
                             driving = False
                             state["driving"] = False
-                        # Draw selected face on frozen frame
-                        draw_overlay(frozen_frame, faces, selected_face, args,
-                                     False, None, 0.0, 0.0)
+                        # Draw selected face highlighted on frozen frame
+                        draw_overlay(frozen_frame, last_faces, selected_face,
+                                     args, False, None, 0.0, 0.0)
                         cv2.putText(frozen_frame,
                                     f"SELECTED area={selected_face.area:.4f} - press SPACE",
                                     (8, fh - 16), cv2.FONT_HERSHEY_SIMPLEX,
@@ -286,6 +292,7 @@ def main():
 
             # --- Normal detection ---
             faces = detector.detect(frame)
+            last_faces = faces
             best = max(faces, key=lambda f: f.area) if faces else None
 
             # --- Control loop ---
@@ -330,6 +337,7 @@ def main():
             display = frame.copy()
             draw_overlay(display, faces, best if tracking else None, args,
                          tracking, target_area, rot_speed, vx)
+            last_display_frame = frame.copy()
 
             # --- Update web UI ---
             if web:

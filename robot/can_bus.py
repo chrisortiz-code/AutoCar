@@ -122,8 +122,16 @@ class MecanumCAN:
                 bus.shutdown()
             except Exception as e:
                 print(f"CAN shutdown warning: {e}")
+            # Release USB handle fully
+            dev = getattr(bus, '_dev', None) or getattr(bus, 'dev', None)
+            if dev is not None:
+                try:
+                    import usb.util
+                    usb.util.dispose_resources(dev)
+                except Exception:
+                    pass
         gc.collect()
-        time.sleep(0.3)
+        time.sleep(0.5)
 
     def _scan_for_odrives(self, attempts=SCAN_ATTEMPTS):
         for attempt in range(attempts):
@@ -185,26 +193,32 @@ class MecanumCAN:
             self._close_bus()
 
     def shutdown(self):
-        bus = self.bus
-        if bus is None:
-            self._closed = True
+        if self._closed and self.bus is None:
             return
 
-        print("Stopping CAN listener...")
+        print("Shutting down...")
         self._closed = True
+
+        # Stop motors and disarm (return to IDLE)
+        if self.bus is not None:
+            try:
+                self.zero_vel()
+            except Exception as e:
+                print(f"Motor stop warning: {e}")
+            try:
+                self.stop_all()
+            except Exception as e:
+                print(f"Disarm warning: {e}")
+
+        # Wait for listener thread to exit
         if self._listener_thread and self._listener_thread.is_alive():
             self._listener_thread.join(timeout=2.0)
         self._listener_thread = None
 
-        print("Stopping motors and closing CAN...")
-        try:
-            self.zero_vel()
-        except Exception as e:
-            print(f"Motor stop warning: {e}")
-
         self._close_bus()
         self.armed.clear()
-        print("Done.")
+        self.connected.clear()
+        print("CAN shutdown complete.")
 
     # ── Motor control ───────────────────────────────────────────────
     def arm(self, node_id):

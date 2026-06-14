@@ -63,7 +63,8 @@ def parse_args():
     parser.add_argument("--max-range-speed", type=float, default=MAX_RANGE_SPEED, help="Max forward/back speed in turns/s")
     parser.add_argument("--area-deadzone", type=float, default=AREA_DEADZONE, help="Accepted area error before fwd/back correction")
     parser.add_argument("--area-gain", type=float, default=AREA_GAIN, help="Area error that maps to full fwd/back command")
-    parser.add_argument("--preview", action="store_true", help="OpenCV window (local display)")
+    parser.add_argument("--preview", action="store_true",
+                        help="MJPEG preview on port 8090 (no robot control)")
     parser.add_argument("--stream", action="store_true", help="Web UI with MJPEG stream (open in browser)")
     parser.add_argument("--stream-port", type=int, default=8090, help="Port for web UI")
     return parser.parse_args()
@@ -137,8 +138,6 @@ def main():
             state["detector"].close()
         if state["cap"]:
             state["cap"].release()
-        if args.preview:
-            cv2.destroyAllWindows()
         if state["web"]:
             state["web"].stop()
         if state["udp_sock"]:
@@ -170,19 +169,21 @@ def main():
         return
     state["cap"] = cap
 
-    udp_sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-    state["udp_sock"] = udp_sock
-    print(f"UDP control -> {args.host}:{args.port}")
+    # UDP control (disabled in preview-only mode)
+    udp_sock = None
+    if not args.preview or args.stream:
+        udp_sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        state["udp_sock"] = udp_sock
+        print(f"UDP control -> {args.host}:{args.port}")
+    else:
+        print("Preview mode — robot control disabled")
 
-    # Web UI
-    if args.stream:
+    # Web UI — start for --stream or --preview
+    if args.stream or args.preview:
         from face_detection.web_ui import WebUI
         web = WebUI(port=args.stream_port)
         state["web"] = web
         print(f"Web UI at http://0.0.0.0:{args.stream_port}")
-
-    if args.preview:
-        cv2.namedWindow("Face Tracking")
 
     if args.follow:
         print("Follow mode: click face to set target distance, then SPACE to start.")
@@ -231,7 +232,7 @@ def main():
                                             if last_display_frame is not None
                                             else frame.copy())
                             tracking = False
-                            if driving:
+                            if driving and udp_sock:
                                 udp_sock.sendto(b"S", udp_dest)
                                 driving = False
                                 state["driving"] = False
@@ -260,7 +261,7 @@ def main():
                         frozen_frame = None
                         selected_face = None
                         target_area = None
-                        if driving:
+                        if driving and udp_sock:
                             udp_sock.sendto(b"S", udp_dest)
                             driving = False
                             state["driving"] = False
@@ -269,32 +270,16 @@ def main():
 
                     if web.poll_stop():
                         tracking = False
-                        if driving:
+                        if driving and udp_sock:
                             udp_sock.sendto(b"S", udp_dest)
                             driving = False
                             state["driving"] = False
                         web.set_state("idle")
                         print("Stopped.")
 
-                # Handle preview clicks for follow mode
-                if args.preview and frozen_frame is not None:
-                    cv2.imshow("Face Tracking", frozen_frame)
-                    key = cv2.waitKey(1) & 0xFF
-                    if key in (ord("q"), 27):
-                        break
-                    if key == ord(" ") and selected_face is not None:
-                        target_area = selected_face.area
-                        tracking = True
-                        frozen_frame = None
-                        selected_face = None
-                        print(f"Following started, target area={target_area:.4f}")
-                    if key == ord("r"):
-                        frozen_frame = None
-                        selected_face = None
-                        tracking = False
-                        target_area = None
-                    if frozen_frame is not None:
-                        continue
+                # Handle frozen frame in follow mode (skip detection while frozen)
+                if frozen_frame is not None:
+                    continue
 
             # --- Normal detection ---
             faces = detector.detect(frame)
@@ -324,17 +309,17 @@ def main():
                             trans_speed = abs(vx) * args.max_range_speed
 
                     if abs(rot_speed) < 0.01 and abs(vx) < 0.01:
-                        if driving:
+                        if driving and udp_sock:
                             udp_sock.sendto(b"S", udp_dest)
                             driving = False
                             state["driving"] = False
-                    else:
+                    elif udp_sock:
                         pkt = b"D" + struct.pack("<ffff", vx, 0.0, trans_speed, rot_speed)
                         udp_sock.sendto(pkt, udp_dest)
                         driving = True
                         state["driving"] = True
                 else:
-                    if driving and (now - last_seen) >= LOST_TIMEOUT:
+                    if driving and udp_sock and (now - last_seen) >= LOST_TIMEOUT:
                         udp_sock.sendto(b"S", udp_dest)
                         driving = False
                         state["driving"] = False
@@ -370,12 +355,9 @@ def main():
                 elif frozen_frame is None:
                     web.set_state("idle")
 
-            # --- OpenCV preview ---
-            if args.preview:
-                cv2.imshow("Face Tracking", display)
-                key = cv2.waitKey(1) & 0xFF
-                if key in (ord("q"), 27):
-                    break
+            # --- Throttle loop when no display waitKey ---
+            if not web:
+                time.sleep(0.001)
 
     except KeyboardInterrupt:
         print("\nInterrupted.")

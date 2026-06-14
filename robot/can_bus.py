@@ -53,15 +53,19 @@ class MecanumCAN:
         self.connected = set()
         self.positions = {nid: 0.0 for nid in ALL_IDS}
         self.currents = {nid: 0.0 for nid in ALL_IDS}
+        self.errors = {nid: 0 for nid in ALL_IDS}
+        self.axis_states = {nid: 0 for nid in ALL_IDS}
         self.max_vel = max_vel
         self.current_limit = current_limit
         self._closed = True
         self._listener_thread = None
+        self._fault_callback = None
+        self._last_fault_time = 0.0
 
     # ── CAN low-level ───────────────────────────────────────────────
     def send(self, node_id, cmd_id, data=b''):
         if self.bus is None:
-            return
+            return False
         msg = can.Message(
             arbitration_id=(node_id << 5) | cmd_id,
             data=data, is_extended_id=False,
@@ -69,11 +73,12 @@ class MecanumCAN:
         for attempt in range(3):
             try:
                 self.bus.send(msg)
-                return
+                return True
             except Exception as e:
                 if attempt == 2:
                     print(f"CAN send error node {node_id} cmd 0x{cmd_id:02X}: {e}")
                 time.sleep(0.05)
+        return False
 
     def _request(self, node_id, cmd_id, dlc=8):
         if self.bus is None:
@@ -109,24 +114,7 @@ class MecanumCAN:
             self._request(nid, CMD_ENCODER_EST, dlc=8)
             self._request(nid, CMD_GET_IQ, dlc=8)
 
-    @staticmethod
-    def _reset_gs_usb():
-        """Reset the GS_USB adapter via pyusb before opening."""
-        try:
-            import usb.core
-            dev = usb.core.find(idVendor=0x1d50, idProduct=0x606f)
-            if dev is not None:
-                try:
-                    dev.reset()
-                    time.sleep(1.5)
-                    print("USB CAN adapter reset.")
-                except Exception as e:
-                    print(f"USB reset warning: {e}")
-        except ImportError:
-            pass
-
     def _open_bus(self):
-        self._reset_gs_usb()
         self.bus = can.Bus(interface='gs_usb', channel=0, bitrate=CAN_BITRATE)
         print("CAN bus connected!")
         self._drain_rx()
@@ -139,18 +127,8 @@ class MecanumCAN:
                 bus.shutdown()
             except Exception as e:
                 print(f"CAN shutdown warning: {e}")
-            # Release the underlying GS_USB device
-            gs_dev = getattr(bus, 'gs_usb', None)
-            if gs_dev is not None:
-                usb_dev = getattr(gs_dev, 'gs_usb', None) or getattr(gs_dev, 'dev', None)
-                if usb_dev is not None:
-                    try:
-                        import usb.util
-                        usb.util.dispose_resources(usb_dev)
-                    except Exception:
-                        pass
         gc.collect()
-        time.sleep(0.5)
+        time.sleep(0.3)
 
     def _scan_for_odrives(self, attempts=SCAN_ATTEMPTS):
         for attempt in range(attempts):
@@ -174,6 +152,10 @@ class MecanumCAN:
                 break
             print("  No ODrives yet, retrying...")
 
+    def on_fault(self, callback):
+        """Register a callback: callback(node_id, error_code) called on fault."""
+        self._fault_callback = callback
+
     def _listener(self):
         while not self._closed and self.bus:
             try:
@@ -182,14 +164,25 @@ class MecanumCAN:
                     continue
                 node_id = msg.arbitration_id >> 5
                 cmd_id  = msg.arbitration_id & 0x1F
-                if cmd_id == CMD_ENCODER_EST and len(msg.data) >= 4:
+                if node_id not in MOTORS:
+                    continue
+                if cmd_id == CMD_HEARTBEAT and len(msg.data) >= 5:
+                    axis_error = struct.unpack('<I', msg.data[:4])[0]
+                    axis_state = msg.data[4]
+                    prev_error = self.errors.get(node_id, 0)
+                    self.errors[node_id] = axis_error
+                    self.axis_states[node_id] = axis_state
+                    if axis_error != 0 and prev_error == 0 and self._fault_callback:
+                        now = time.time()
+                        if now - self._last_fault_time > 3.0:
+                            self._last_fault_time = now
+                            self._fault_callback(node_id, axis_error)
+                elif cmd_id == CMD_ENCODER_EST and len(msg.data) >= 4:
                     pos = struct.unpack('<f', msg.data[:4])[0]
-                    if node_id in MOTORS:
-                        self.positions[node_id] = round(pos, 3)
+                    self.positions[node_id] = round(pos, 3)
                 elif cmd_id == CMD_GET_IQ and len(msg.data) >= 8:
                     iq_setpoint, iq_measured = struct.unpack('<ff', msg.data[:8])
-                    if node_id in MOTORS:
-                        self.currents[node_id] = round(iq_measured, 3)
+                    self.currents[node_id] = round(iq_measured, 3)
             except:
                 pass
 
@@ -209,6 +202,10 @@ class MecanumCAN:
             print(f"Connected: {sorted(self.connected)}")
             if not self.connected:
                 print("WARNING: No ODrives found.")
+            # Clear any pre-existing errors before starting
+            if self.connected:
+                print("Clearing any pre-existing ODrive errors...")
+                self.clear_all_errors()
             self._listener_thread = threading.Thread(target=self._listener, daemon=True)
             self._listener_thread.start()
         except KeyboardInterrupt:
@@ -251,6 +248,38 @@ class MecanumCAN:
         print("CAN shutdown complete.")
 
     # ── Motor control ───────────────────────────────────────────────
+    def clear_errors(self, node_id):
+        """Send clear-errors command (0x18) to an ODrive node."""
+        self.send(node_id, 0x18, b'\x00\x00\x00\x00')
+        self.errors[node_id] = 0
+        time.sleep(0.1)
+
+    def clear_all_errors(self):
+        for nid in self.connected:
+            self.clear_errors(nid)
+
+    def estop_and_recover(self):
+        """Stop all motors, clear errors, and re-arm. Returns False if bus is dead."""
+        if self.bus is None:
+            print("[recovery] CAN bus is gone, cannot recover")
+            return False
+        ok = True
+        for nid in list(self.armed):
+            if not self.send(nid, CMD_SET_INPUT_VEL, struct.pack('<ff', 0.0, 0.0)):
+                ok = False
+        if not ok:
+            print("[recovery] CAN bus not responding, aborting recovery")
+            return False
+        time.sleep(0.1)
+        for nid in list(self.armed):
+            self.send(nid, CMD_SET_AXIS_STATE, struct.pack('<I', 1))
+        self.armed.clear()
+        time.sleep(0.3)
+        self.clear_all_errors()
+        time.sleep(0.2)
+        self.arm_all()
+        return True
+
     def arm(self, node_id):
         if node_id in self.armed:
             return

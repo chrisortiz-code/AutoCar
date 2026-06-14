@@ -8,10 +8,25 @@ Get a YOLO face model:
 """
 
 import os
+import urllib.request
 
 from .base import FaceDetector, Detection
 
 DEFAULT_MODEL = "yolov8n-face.pt"
+MODEL_URL = "https://github.com/akanametov/yolov8-face/releases/download/v0.0.0/yolov8n-face.pt"
+MODEL_DIR = os.path.dirname(os.path.abspath(__file__))
+
+
+def _ensure_model(model_path):
+    if os.path.exists(model_path):
+        return model_path
+    dest = os.path.join(MODEL_DIR, os.path.basename(model_path))
+    if os.path.exists(dest):
+        return dest
+    print(f"[yolo] Downloading {os.path.basename(model_path)} ...")
+    urllib.request.urlretrieve(MODEL_URL, dest)
+    print(f"[yolo] Saved to {dest}")
+    return dest
 
 
 class YOLOFaceDetector(FaceDetector):
@@ -19,6 +34,8 @@ class YOLOFaceDetector(FaceDetector):
 
     def __init__(self, model_path=DEFAULT_MODEL, device=0, imgsz=640):
         from ultralytics import YOLO
+
+        model_path = _ensure_model(model_path)
 
         # Prefer TensorRT engine if it exists next to the .pt
         engine = model_path.replace(".pt", ".engine")

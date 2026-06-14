@@ -39,7 +39,7 @@ load_dotenv(os.path.join(os.path.dirname(__file__), '..', '.env'))
 DEADZONE = 0.10
 MAX_ROT_SPEED = 3.0
 MAX_RANGE_SPEED = 5.0
-AREA_DEADZONE = 0.18
+AREA_DEADZONE = 0.08
 AREA_GAIN = 0.70
 CONTROL_HZ = 20
 LOST_TIMEOUT = 1.0

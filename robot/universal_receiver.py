@@ -6,8 +6,10 @@ the shared D/S/E/Q packet format.
 Usage:  python universal_receiver.py
 """
 
+import signal
 import socket
 import struct
+import threading
 import time
 
 from can_bus import MecanumCAN
@@ -15,16 +17,54 @@ from can_bus import MecanumCAN
 LISTEN_PORT = 5555
 TIMEOUT = 0.5      # no packet for this long -> safety stop
 LOG_INTERVAL = 0.2 # seconds between amperage/status prints
+CURRENT_SPIKE_THRESHOLD = 8.0  # amps above the average of other motors = stall
+CURRENT_CHECK_INTERVAL = 0.15
+
+_shutdown_event = threading.Event()
+
+
+def check_current_spike(mc):
+    """Return (node_id, current) of a stalled motor, or None."""
+    currents = {nid: abs(mc.currents.get(nid, 0.0)) for nid in mc.connected}
+    if len(currents) < 2:
+        return None
+    for nid, amps in currents.items():
+        others = [v for k, v in currents.items() if k != nid]
+        avg_others = sum(others) / len(others)
+        if amps > avg_others + CURRENT_SPIKE_THRESHOLD and amps > 5.0:
+            return nid, amps
+    return None
 
 
 def main():
     mc = MecanumCAN(current_limit=30.0)
+
+    recovery_lock = threading.Lock()
+
+    def handle_fault(node_id, error_code):
+        if recovery_lock.locked():
+            return
+        with recovery_lock:
+            from can_bus import MOTORS
+            role = MOTORS[node_id]["role"] if node_id in MOTORS else str(node_id)
+            print(f"\n!! FAULT on motor {role} (node {node_id}), error=0x{error_code:08X}")
+            print("   Auto-recovering: stop -> clear errors -> re-arm ...")
+            mc.estop_and_recover()
+            print("   Recovery complete.\n")
+
+    mc.on_fault(handle_fault)
     mc.connect()
     mc.arm_all()
 
     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     sock.bind(("0.0.0.0", LISTEN_PORT))
     sock.settimeout(TIMEOUT)
+
+    def signal_handler(sig, frame):
+        _shutdown_event.set()
+
+    signal.signal(signal.SIGTERM, signal_handler)
+    signal.signal(signal.SIGINT, signal_handler)
 
     print(f"\nListening on UDP :{LISTEN_PORT}")
     print("Waiting for controller packets from PS4/camera/GUI...\n")
@@ -33,7 +73,7 @@ def main():
     last_log = 0.0
 
     try:
-        while True:
+        while not _shutdown_event.is_set():
             try:
                 data, addr = sock.recvfrom(64)
             except socket.timeout:
@@ -55,6 +95,16 @@ def main():
                 now = time.time()
                 if now - last_log >= LOG_INTERVAL:
                     mc.request_all_iq()
+                    time.sleep(CURRENT_CHECK_INTERVAL)
+                    spike = check_current_spike(mc)
+                    if spike:
+                        nid, amps = spike
+                        from can_bus import MOTORS
+                        role = MOTORS[nid]["role"]
+                        print(f"\n!! CURRENT SPIKE on {role} ({amps:.1f}A) - auto estop+recover")
+                        mc.estop_and_recover()
+                        driving = False
+                        continue
                     print(f"  {mc.status_line()}", end="\r")
                     last_log = now
 
@@ -85,6 +135,16 @@ def main():
                 now = time.time()
                 if now - last_log >= LOG_INTERVAL:
                     mc.request_all_iq()
+                    time.sleep(CURRENT_CHECK_INTERVAL)
+                    spike = check_current_spike(mc)
+                    if spike:
+                        nid, amps = spike
+                        from can_bus import MOTORS
+                        role = MOTORS[nid]["role"]
+                        print(f"\n!! CURRENT SPIKE on {role} ({amps:.1f}A) - auto estop+recover")
+                        mc.estop_and_recover()
+                        driving = False
+                        continue
                     print(f"  {mc.status_line()}", end="\r")
                     last_log = now
 

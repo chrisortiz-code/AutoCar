@@ -47,7 +47,7 @@ def main():
 
             if cmd == "D":
                 vx, vy, trans_speed, rot_speed = struct.unpack("<ffff", data[1:17])
-                mc.drive(vx, vy, trans_speed, rot_speed)
+                mc.drive(vx, vy, trans_speed, -rot_speed)
                 if not driving:
                     print(f"Driving (from {addr[0]})")
                 driving = True

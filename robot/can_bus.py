@@ -118,7 +118,7 @@ class MecanumCAN:
             if dev is not None:
                 try:
                     dev.reset()
-                    time.sleep(0.5)
+                    time.sleep(1.5)
                     print("USB CAN adapter reset.")
                 except Exception as e:
                     print(f"USB reset warning: {e}")
@@ -155,13 +155,21 @@ class MecanumCAN:
     def _scan_for_odrives(self, attempts=SCAN_ATTEMPTS):
         for attempt in range(attempts):
             print(f"Scanning for ODrives (attempt {attempt+1}/{attempts})...")
-            self._probe_nodes()
             start = time.time()
             while time.time() - start < 3:
-                msg = self.bus.recv(timeout=0.5)
-                if msg:
-                    node_id = msg.arbitration_id >> 5
-                    self._remember_node(node_id)
+                # Re-probe periodically so ODrives that come up late get poked
+                self._probe_nodes()
+                probe_end = time.time() + 0.5
+                while time.time() < probe_end:
+                    msg = self.bus.recv(timeout=0.1)
+                    if msg:
+                        node_id = msg.arbitration_id >> 5
+                        cmd_id = msg.arbitration_id & 0x1F
+                        # Accept heartbeats OR probe responses
+                        if cmd_id in (CMD_HEARTBEAT, CMD_ENCODER_EST, CMD_GET_IQ):
+                            self._remember_node(node_id)
+                if len(self.connected) == len(ALL_IDS):
+                    break
             if self.connected:
                 break
             print("  No ODrives yet, retrying...")

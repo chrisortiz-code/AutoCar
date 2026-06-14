@@ -126,12 +126,8 @@ class MecanumCAN:
             pass
 
     def _open_bus(self):
-        try:
-            self.bus = can.Bus(interface='gs_usb', channel=0, bitrate=CAN_BITRATE)
-        except Exception:
-            print("Bus open failed, resetting USB adapter...")
-            self._reset_gs_usb()
-            self.bus = can.Bus(interface='gs_usb', channel=0, bitrate=CAN_BITRATE)
+        self._reset_gs_usb()
+        self.bus = can.Bus(interface='gs_usb', channel=0, bitrate=CAN_BITRATE)
         print("CAN bus connected!")
         self._drain_rx()
 

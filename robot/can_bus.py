@@ -109,8 +109,29 @@ class MecanumCAN:
             self._request(nid, CMD_ENCODER_EST, dlc=8)
             self._request(nid, CMD_GET_IQ, dlc=8)
 
+    @staticmethod
+    def _reset_gs_usb():
+        """Reset the GS_USB adapter via pyusb before opening."""
+        try:
+            import usb.core
+            dev = usb.core.find(idVendor=0x1d50, idProduct=0x606f)
+            if dev is not None:
+                try:
+                    dev.reset()
+                    time.sleep(0.5)
+                    print("USB CAN adapter reset.")
+                except Exception as e:
+                    print(f"USB reset warning: {e}")
+        except ImportError:
+            pass
+
     def _open_bus(self):
-        self.bus = can.Bus(interface='gs_usb', channel=0, bitrate=CAN_BITRATE)
+        try:
+            self.bus = can.Bus(interface='gs_usb', channel=0, bitrate=CAN_BITRATE)
+        except Exception:
+            print("Bus open failed, resetting USB adapter...")
+            self._reset_gs_usb()
+            self.bus = can.Bus(interface='gs_usb', channel=0, bitrate=CAN_BITRATE)
         print("CAN bus connected!")
         self._drain_rx()
 
@@ -122,14 +143,16 @@ class MecanumCAN:
                 bus.shutdown()
             except Exception as e:
                 print(f"CAN shutdown warning: {e}")
-            # Release USB handle fully
-            dev = getattr(bus, '_dev', None) or getattr(bus, 'dev', None)
-            if dev is not None:
-                try:
-                    import usb.util
-                    usb.util.dispose_resources(dev)
-                except Exception:
-                    pass
+            # Release the underlying GS_USB device
+            gs_dev = getattr(bus, 'gs_usb', None)
+            if gs_dev is not None:
+                usb_dev = getattr(gs_dev, 'gs_usb', None) or getattr(gs_dev, 'dev', None)
+                if usb_dev is not None:
+                    try:
+                        import usb.util
+                        usb.util.dispose_resources(usb_dev)
+                    except Exception:
+                        pass
         gc.collect()
         time.sleep(0.5)
 

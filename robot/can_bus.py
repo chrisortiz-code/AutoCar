@@ -218,21 +218,24 @@ class MecanumCAN:
         print("Shutting down...")
         self._closed = True
 
-        # Stop motors and disarm (return to IDLE)
-        if self.bus is not None:
-            try:
-                self.zero_vel()
-            except Exception as e:
-                print(f"Motor stop warning: {e}")
-            try:
-                self.stop_all()
-            except Exception as e:
-                print(f"Disarm warning: {e}")
-
-        # Wait for listener thread to exit
+        # Stop listener first so it doesn't compete for the bus
         if self._listener_thread and self._listener_thread.is_alive():
             self._listener_thread.join(timeout=2.0)
         self._listener_thread = None
+
+        # Now send stop commands with bus to ourselves
+        if self.bus is not None:
+            for nid in list(self.armed):
+                try:
+                    self.send(nid, CMD_SET_INPUT_VEL, struct.pack('<ff', 0.0, 0.0))
+                except Exception:
+                    pass
+            time.sleep(0.05)
+            for nid in list(self.armed):
+                try:
+                    self.send(nid, CMD_SET_AXIS_STATE, struct.pack('<I', 1))
+                except Exception:
+                    pass
 
         self._close_bus()
         self.armed.clear()

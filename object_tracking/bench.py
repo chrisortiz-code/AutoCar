@@ -34,31 +34,48 @@ from .base import BACKENDS, create_matcher
 
 
 BENCH_HTML = """<!DOCTYPE html>
-<html>
+<html lang="en">
 <head>
-<title>Object Tracking Bench</title>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+<title>Object Tracking</title>
 <style>
   * { margin: 0; padding: 0; box-sizing: border-box; }
-  body { background: #111; color: #eee; font-family: monospace;
-         display: flex; flex-direction: column; align-items: center; }
-  #wrapper { position: relative; margin-top: 10px; width: 640px; height: 480px;
-             border: 2px solid #333; cursor: crosshair; }
-  #wrapper.tracking { border-color: #0f0; }
-  #wrapper.frozen { border-color: #f80; }
+  body { background: #1a1a1a; color: #d4d4d4;
+         font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+         display: flex; flex-direction: column; align-items: center;
+         min-height: 100vh; padding: 16px; }
+  header { display: flex; align-items: baseline; gap: 12px; width: 640px;
+           margin-bottom: 8px; }
+  header h1 { font-size: 14px; font-weight: 600; color: #e0e0e0; }
+  #badge { font-size: 11px; color: #777; margin-left: auto; }
+  #wrapper { position: relative; width: 640px; height: 480px;
+             border: 1px solid #333; cursor: crosshair; overflow: hidden; }
+  #wrapper.tracking { border-color: #5a9a5a; }
+  #wrapper.frozen { border-color: #c87830; }
   #feed { width: 100%; height: 100%; display: block; }
   #overlay { position: absolute; top: 0; left: 0; width: 100%; height: 100%;
              pointer-events: none; }
   #snapshot { position: absolute; top: 0; left: 0; width: 100%; height: 100%;
               display: none; }
-  #ref-container { margin-top: 8px; display: flex; align-items: center; gap: 12px; }
-  #ref-img { border: 2px solid #555; display: none; }
-  #status { margin-top: 8px; font-size: 16px; min-height: 24px; }
-  #help { margin-top: 6px; font-size: 13px; color: #666; }
-  .val { color: #0f0; }
-  .warn { color: #f80; }
+  #ref-container { margin-top: 8px; width: 640px; display: flex;
+                   align-items: center; gap: 12px; padding: 6px 0;
+                   border-bottom: 1px solid #2a2a2a; }
+  #ref-container span { font-size: 12px; color: #888; }
+  #ref-img { border: 1px solid #333; display: none; }
+  #status { margin-top: 8px; width: 640px; font-size: 12px; color: #999;
+            padding: 8px 0; border-bottom: 1px solid #2a2a2a; min-height: 28px; }
+  .val { color: #b0b0b0; font-weight: 500; }
+  .warn { color: #c87830; font-weight: 500; }
+  #help { margin-top: 6px; width: 640px; font-size: 11px; color: #555;
+          text-align: center; }
 </style>
 </head>
 <body>
+  <header>
+    <h1>Object Tracking</h1>
+    <span id="badge">idle</span>
+  </header>
   <div id="wrapper">
     <img id="feed" src="/stream" />
     <canvas id="snapshot"></canvas>
@@ -69,8 +86,8 @@ BENCH_HTML = """<!DOCTYPE html>
     <img id="ref-img" height="80" />
     <span id="ref-status">Drag on feed to select target</span>
   </div>
-  <div id="status">Waiting...</div>
-  <div id="help">Click+drag to select &bull; SPACE to confirm &bull; ESC to cancel &bull; R to reset</div>
+  <div id="status">Select a target object</div>
+  <div id="help">drag &middot; select | space &middot; confirm | esc &middot; cancel | r &middot; reset</div>
 <script>
 const wrapper = document.getElementById('wrapper');
 const feed = document.getElementById('feed');
@@ -198,6 +215,7 @@ document.body.addEventListener('drop', (e) => {
   refStatus.textContent = 'Uploading...';
 });
 
+const badgeEl = document.getElementById('badge');
 setInterval(async () => {
   try {
     const r = await fetch('/status');
@@ -207,21 +225,23 @@ setInterval(async () => {
       refImg.style.display = 'inline';
       refStatus.textContent = '';
       if (!frozen) wrapper.className = 'tracking';
+      badgeEl.textContent = s.matched ? 'matched' : 'searching';
     } else {
       refImg.style.display = 'none';
       if (!frozen) refStatus.textContent = 'Drag on feed to select target';
       if (!frozen) wrapper.className = '';
+      badgeEl.textContent = 'idle';
     }
     if (s.matched) {
-      status.innerHTML = s.backend + ' | <span class="val">' +
-        s.latency_ms.toFixed(1) + 'ms</span> | conf=' +
-        s.confidence.toFixed(2) + ' | angle=' + s.angle.toFixed(0) +
-        '&deg; | ' + s.fps.toFixed(0) + ' fps';
+      statusEl.innerHTML = s.backend + ' · <span class="val">' +
+        s.latency_ms.toFixed(1) + 'ms</span> · conf ' +
+        s.confidence.toFixed(2) + ' · angle ' + s.angle.toFixed(0) +
+        '° · ' + s.fps.toFixed(0) + ' fps';
     } else if (s.has_ref) {
-      status.innerHTML = s.backend + ' | ' + s.latency_ms.toFixed(1) +
-        'ms | <span class="warn">no match</span>';
+      statusEl.innerHTML = s.backend + ' · ' + s.latency_ms.toFixed(1) +
+        'ms · <span class="warn">no match</span>';
     } else {
-      status.textContent = 'Select a target object';
+      statusEl.textContent = 'Select a target object';
     }
   } catch(e) {}
 }, 150);

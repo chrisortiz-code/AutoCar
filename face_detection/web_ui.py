@@ -15,29 +15,44 @@ from urllib.parse import urlparse, parse_qs
 import cv2
 
 PAGE_HTML = """<!DOCTYPE html>
-<html>
+<html lang="en">
 <head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0"/>
 <title>Face Tracker</title>
 <style>
   * { margin: 0; padding: 0; box-sizing: border-box; }
-  body { background: #111; color: #eee; font-family: monospace; display: flex;
-         flex-direction: column; align-items: center; height: 100vh; }
-  #feed { cursor: crosshair; border: 2px solid #333; margin-top: 10px; }
-  #feed.frozen { border-color: #f80; }
-  #feed.tracking { border-color: #0f0; }
-  #status { margin-top: 8px; font-size: 18px; min-height: 28px; }
-  #help { margin-top: 6px; font-size: 13px; color: #666; }
-  .val { color: #0f0; }
-  .warn { color: #f80; }
+  body { background: #1a1a1a; color: #d4d4d4;
+         font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+         display: flex; flex-direction: column; align-items: center;
+         min-height: 100vh; padding: 16px; }
+  header { display: flex; align-items: baseline; gap: 12px; width: 640px;
+           margin-bottom: 8px; }
+  header h1 { font-size: 14px; font-weight: 600; color: #e0e0e0; }
+  #badge { font-size: 11px; color: #777; margin-left: auto; }
+  #feed { cursor: crosshair; border: 1px solid #333; }
+  #feed.frozen { border-color: #c87830; }
+  #feed.tracking { border-color: #5a9a5a; }
+  #status { margin-top: 8px; width: 640px; font-size: 12px; color: #999;
+            padding: 8px 0; border-bottom: 1px solid #2a2a2a; min-height: 28px; }
+  .val { color: #b0b0b0; font-weight: 500; }
+  .warn { color: #c87830; font-weight: 500; }
+  #help { margin-top: 6px; width: 640px; font-size: 11px; color: #555;
+          text-align: center; }
 </style>
 </head>
 <body>
+  <header>
+    <h1>Face Tracker</h1>
+    <span id="badge">idle</span>
+  </header>
   <img id="feed" src="/stream" width="640" height="480" />
-  <div id="status">Waiting...</div>
-  <div id="help">Click face to freeze &amp; select &bull; SPACE to confirm &amp; track &bull; R to reset</div>
+  <div id="status">Click a face to select</div>
+  <div id="help">click &middot; select face | space &middot; confirm | r &middot; reset | s &middot; stop</div>
 <script>
 const feed = document.getElementById('feed');
 const status = document.getElementById('status');
+const badge = document.getElementById('badge');
 
 feed.addEventListener('click', (e) => {
   const rect = feed.getBoundingClientRect();
@@ -57,19 +72,20 @@ setInterval(async () => {
     const r = await fetch('/status');
     const s = await r.json();
     feed.className = s.state === 'frozen' ? 'frozen' : s.state === 'tracking' ? 'tracking' : '';
+    badge.textContent = s.state;
     if (s.state === 'idle') {
       status.innerHTML = 'Click a face to select';
     } else if (s.state === 'frozen') {
       status.innerHTML = 'Selected area: <span class="warn">' + s.selected_area.toFixed(4) +
-        '</span> &mdash; press SPACE to start tracking';
+        '</span> — press space to start tracking';
     } else if (s.state === 'tracking') {
-      let txt = 'Tracking &mdash; area: <span class="val">' + s.current_area.toFixed(4) +
-        '</span> / target: ' + s.target_area.toFixed(4);
-      if (s.rot_speed !== undefined) txt += ' &bull; rot: ' + s.rot_speed.toFixed(2);
-      if (s.vx !== undefined) txt += ' &bull; vx: ' + s.vx.toFixed(2);
+      let txt = 'area <span class="val">' + s.current_area.toFixed(4) +
+        '</span> / target ' + s.target_area.toFixed(4);
+      if (s.rot_speed !== undefined) txt += ' · rot ' + s.rot_speed.toFixed(2);
+      if (s.vx !== undefined) txt += ' · vx ' + s.vx.toFixed(2);
       status.innerHTML = txt;
     } else if (s.state === 'lost') {
-      status.innerHTML = '<span class="warn">Face lost</span>';
+      status.innerHTML = '<span class="warn">face lost</span>';
     }
   } catch(e) {}
 }, 150);

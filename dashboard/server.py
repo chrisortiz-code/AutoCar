@@ -14,6 +14,8 @@ Usage:
 
 import argparse
 import json
+import subprocess
+import sys
 import threading
 import time
 from http.server import BaseHTTPRequestHandler, HTTPServer
@@ -278,6 +280,15 @@ def main():
     args = parser.parse_args()
 
     cam_reader = None
+    lidar_proc = None
+
+    # Start lidar in a separate process (avoids GIL contention with camera)
+    lidar_cmd = [sys.executable, "-m", "lidar.viewer",
+                 "--web-port", str(args.lidar_web_port)]
+    if args.demo:
+        lidar_cmd.append("--demo")
+    lidar_proc = subprocess.Popen(lidar_cmd)
+    print(f"Lidar viewer launched on port {args.lidar_web_port} (pid {lidar_proc.pid})")
 
     # Start camera
     if not args.no_camera:
@@ -294,8 +305,6 @@ def main():
     server = DashboardServer(cam_reader, None, port=args.web_port,
                              lidar_port=args.lidar_web_port)
     print(f"Dashboard at http://localhost:{args.web_port}")
-    print(f"Lidar expected at http://localhost:{args.lidar_web_port}")
-    print("  (start separately with: python3 -m lidar.viewer)")
     print("Ctrl+C to stop.")
 
     try:
@@ -306,6 +315,9 @@ def main():
     finally:
         if cam_reader:
             cam_reader.stop()
+        if lidar_proc:
+            lidar_proc.terminate()
+            lidar_proc.wait(timeout=3)
         server.stop()
         print("Done.")
 

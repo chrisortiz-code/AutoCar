@@ -1,0 +1,46 @@
+========================================
+  AutoCar — Quick-Start Commands
+========================================
+
+----------------------------------------
+  OBSTACLE DETECTION
+----------------------------------------
+
+# Basic (defaults)
+python -m obstacle_detection.viewer
+
+# Custom model / port
+python -m obstacle_detection.viewer --model yolo11s.engine --port 8091
+
+# Custom class filter
+python -m obstacle_detection.viewer --world "person,chair,wall,stairs,cone,dog,car"
+
+# Custom camera / resolution
+python -m obstacle_detection.viewer --camera 0 --width 640 --height 480
+
+
+----------------------------------------
+  FACE FOLLOW WITH TRACE
+----------------------------------------
+
+# Trace mode + web stream  (rotate to keep face centered, no driving)
+python controllers/face_follow_controller.py --backend mediapipe --stream
+
+# Trace mode + local MJPEG preview (no robot control)
+python controllers/face_follow_controller.py --backend mediapipe --preview
+
+# Follow mode + web stream  (trace + drives forward/back to maintain distance)
+python controllers/face_follow_controller.py --follow --backend mediapipe --stream
+
+# Follow mode with tuning options
+python controllers/face_follow_controller.py --follow --backend mediapipe --stream --max-rot 3.0 --deadzone 0.10
+
+
+----------------------------------------
+  NOTES
+----------------------------------------
+- Run from the AutoCar project root directory.
+- The face controller sends UDP commands; make sure universal_receiver.py is running on the robot.
+- Default UDP target is ROBOT_IP from .env (fallback 127.0.0.1:5555).
+- Web UI streams are served on port 8090 by default (--stream-port to change).
+- Obstacle viewer serves on port 8090 by default (--port to change).

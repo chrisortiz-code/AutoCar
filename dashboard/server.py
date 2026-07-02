@@ -203,7 +203,6 @@ class DashboardServer:
                     self._mjpeg_stream("depth")
                 elif path == "/status":
                     cam_snap = parent._cam.get_frames() if parent._cam else {}
-                    lidar_snap = parent._lidar.get_scan() if parent._lidar else {}
                     data = {
                         "cam_connected": cam_snap.get("connected", False),
                         "cam_error": cam_snap.get("error"),
@@ -211,8 +210,8 @@ class DashboardServer:
                         "cam_frame_count": cam_snap.get("frame_count", 0),
                         "cam_width": parent._cam.width if parent._cam else 0,
                         "cam_height": parent._cam.height if parent._cam else 0,
-                        "lidar_connected": lidar_snap.get("connected", False),
-                        "lidar_error": lidar_snap.get("error"),
+                        "lidar_connected": parent._lidar.connected if parent._lidar else False,
+                        "lidar_error": parent._lidar.error if parent._lidar else None,
                     }
                     self.send_response(200)
                     self.send_header("Content-Type", "application/json")
@@ -224,6 +223,10 @@ class DashboardServer:
                     self.end_headers()
 
             def _mjpeg_stream(self, feed):
+                if parent._cam is None:
+                    self.send_response(503)
+                    self.end_headers()
+                    return
                 self.send_response(200)
                 self.send_header("Content-Type",
                                  "multipart/x-mixed-replace; boundary=frame")
@@ -231,11 +234,11 @@ class DashboardServer:
                 try:
                     while True:
                         if feed == "rgb":
-                            jpg = parent._cam.get_rgb_jpeg() if parent._cam else None
+                            jpg = parent._cam.get_rgb_jpeg()
                         else:
-                            jpg = parent._cam.get_depth_jpeg() if parent._cam else None
+                            jpg = parent._cam.get_depth_jpeg()
                         if jpg is None:
-                            time.sleep(0.01)
+                            time.sleep(0.1)
                             continue
                         self.wfile.write(b"--frame\r\n"
                                          b"Content-Type: image/jpeg\r\n\r\n"

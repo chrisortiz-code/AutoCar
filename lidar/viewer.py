@@ -192,6 +192,12 @@ class ScanServer:
         parent = self
 
         class Handler(BaseHTTPRequestHandler):
+            def handle(self):
+                try:
+                    super().handle()
+                except (BrokenPipeError, ConnectionResetError):
+                    pass
+
             def do_GET(self):
                 path = self.path.split("?")[0]
                 if path == "/":

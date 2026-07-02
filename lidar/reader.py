@@ -185,8 +185,24 @@ class LidarReader:
         lidar = PyRPlidar()
         try:
             lidar.connect(port=self.port, baudrate=self.baudrate, timeout=3)
+            # Flush any stale data from previous session
+            if hasattr(lidar, '_serial') and lidar._serial:
+                lidar._serial.reset_input_buffer()
+                lidar._serial.reset_output_buffer()
+            time.sleep(0.2)
             self._lidar = lidar
-            info = lidar.get_info()
+
+            # Retry get_info in case of sync errors from stale data
+            for attempt in range(3):
+                try:
+                    info = lidar.get_info()
+                    break
+                except Exception:
+                    if hasattr(lidar, '_serial') and lidar._serial:
+                        lidar._serial.reset_input_buffer()
+                    time.sleep(0.3)
+            else:
+                raise RuntimeError("Failed to sync with lidar after 3 attempts")
             health = lidar.get_health()
             with self._lock:
                 self._connected = True

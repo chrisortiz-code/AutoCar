@@ -302,6 +302,12 @@ class DashboardServer:
         parent = self
 
         class Handler(BaseHTTPRequestHandler):
+            def handle(self):
+                try:
+                    super().handle()
+                except BrokenPipeError:
+                    pass
+
             def do_GET(self):
                 path = self.path.split("?")[0]
                 if path == "/":

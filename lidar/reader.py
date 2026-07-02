@@ -215,18 +215,15 @@ class LidarReader:
                 dist = measurement.distance
                 quality = measurement.quality
 
-                if dist > 0 and quality >= 10:
+                now = time.perf_counter()
+
+                if 0 < dist < 30000:
                     slot = int(angle * NUM_SLOTS / 360.0) % NUM_SLOTS
-                    buf[slot] = {
-                        "angle": round(angle, 2),
-                        "dist_mm": int(dist),
-                        "quality": int(quality),
-                    }
+                    buf[slot] = (round(angle, 2), int(dist), int(quality), now)
                     update_count += 1
 
                 # Detect full revolution to update Hz counter
                 if prev_angle > 300 and angle < 60:
-                    now = time.perf_counter()
                     if self._last_scan_time:
                         scan_times.append(now - self._last_scan_time)
                         if len(scan_times) > 20:
@@ -239,7 +236,12 @@ class LidarReader:
                 # Push snapshot to viewer every ~360 points
                 if update_count >= 360:
                     update_count = 0
-                    snapshot = [p for p in buf if p is not None]
+                    # Only include points from the last 0.5s (a few revolutions)
+                    cutoff = now - 0.5
+                    snapshot = [
+                        {"angle": b[0], "dist_mm": b[1], "quality": b[2]}
+                        for b in buf if b is not None and b[3] > cutoff
+                    ]
                     with self._lock:
                         self._scan = snapshot
         except Exception as exc:

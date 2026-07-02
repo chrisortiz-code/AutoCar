@@ -1,0 +1,337 @@
+"""
+RPLIDAR reader — S2 defaults (1 Mbps serial over USB adapter).
+
+Usage:
+    python -m lidar.reader --list-ports
+    python -m lidar.reader --port COM3
+"""
+
+import argparse
+import math
+import sys
+import threading
+import time
+
+try:
+    import serial.tools.list_ports
+except ImportError:
+    serial = None  # type: ignore
+
+
+def _patch_pyrplidar():
+    """Fix pyrplidar dense capsule bugs:
+    1. DenseCabin byte order is big-endian but protocol is little-endian.
+    2. _parse_capsule applies << 2 to dense distances (already in mm).
+    """
+    try:
+        import pyrplidar as _mod
+        # Fix byte order: protocol is little-endian
+        _orig_cabin_init = _mod.PyRPlidarDenseCabin.__init__
+
+        def _cabin_init(self, raw_bytes):
+            self.distance = raw_bytes[0] + (raw_bytes[1] << 8)
+
+        _mod.PyRPlidarDenseCabin.__init__ = _cabin_init
+
+        # Fix _parse_capsule: don't << 2 for dense distances
+        _orig_parse = _mod.PyRPlidarScanDenseCapsule._parse_capsule
+
+        @classmethod
+        def _fixed_parse(cls, capsule_prev, capsule_current):
+            nodes = []
+            currentStartAngle_q8 = capsule_current.start_angle_q6 << 2
+            prevStartAngle_q8 = capsule_prev.start_angle_q6 << 2
+            diffAngle_q8 = currentStartAngle_q8 - prevStartAngle_q8
+            if prevStartAngle_q8 > currentStartAngle_q8:
+                diffAngle_q8 += (360 << 8)
+            angleInc_q16 = (diffAngle_q8 << 8) // 40
+            currentAngle_raw_q16 = prevStartAngle_q8 << 8
+            for pos in range(len(capsule_prev.cabins)):
+                syncBit = 1 if (((currentAngle_raw_q16 + angleInc_q16) % (360 << 16)) < angleInc_q16) else 0
+                angle_q6 = currentAngle_raw_q16 >> 10
+                if angle_q6 < 0:
+                    angle_q6 += (360 << 6)
+                if angle_q6 >= (360 << 6):
+                    angle_q6 -= (360 << 6)
+                currentAngle_raw_q16 += angleInc_q16
+                # Dense cabin distance is already in mm — no << 2
+                dist_q2 = capsule_prev.cabins[pos].distance * 4  # store as q2 for MeasurementHQ
+                node = _mod.PyRPlidarMeasurementHQ(syncBit, angle_q6, dist_q2)
+                nodes.append(node)
+            return nodes
+
+        _mod.PyRPlidarScanDenseCapsule._parse_capsule = _fixed_parse
+    except ImportError:
+        pass
+
+
+_patch_pyrplidar()
+
+# S2 uses 1M baud; A1/A2=115200, A3/S1=256000
+MODEL_BAUD = {
+    "s2": 1_000_000,
+    "s1": 256_000,
+    "a3": 256_000,
+    "a1": 115_200,
+    "a2": 115_200,
+}
+
+MODEL_SCAN_TYPE = {
+    "s2": "express",
+    "s1": "express",
+    "a3": "express",
+    "a1": "normal",
+    "a2": "normal",
+}
+
+
+def list_serial_ports():
+    """Return available serial port device names."""
+    if serial is None:
+        return []
+    return [p.device for p in serial.tools.list_ports.comports()]
+
+
+class LidarReader:
+    """Background scan reader for RPLIDAR devices."""
+
+    def __init__(self, port, *, baudrate=1_000_000, scan_type='express', demo=False):
+        self.port = port
+        self.baudrate = baudrate
+        self.scan_type = scan_type
+        self.demo = demo
+        self._lidar = None
+        self._lock = threading.Lock()
+        self._stop = threading.Event()
+        self._thread = None
+        self._connected = False
+        self._error = None
+        self._scan = []  # list of {angle, dist_mm, quality}
+        self._scan_hz = 0.0
+        self._last_scan_time = 0.0
+
+    @property
+    def connected(self):
+        return self._connected
+
+    @property
+    def error(self):
+        return self._error
+
+    def start(self):
+        if self._thread and self._thread.is_alive():
+            return
+        self._stop.clear()
+        self._thread = threading.Thread(target=self._run, daemon=True)
+        self._thread.start()
+
+    def stop(self):
+        self._stop.set()
+        if self._thread:
+            self._thread.join(timeout=3)
+            self._thread = None
+        self._disconnect()
+
+    def get_scan(self):
+        """Return a snapshot of the latest scan and metadata."""
+        with self._lock:
+            points = list(self._scan)
+            return {
+                "points": points,
+                "count": len(points),
+                "scan_hz": round(self._scan_hz, 1),
+                "connected": self._connected,
+                "port": self.port,
+                "error": self._error,
+            }
+
+    def _disconnect(self):
+        lidar = self._lidar
+        self._lidar = None
+        if lidar is None:
+            return
+        try:
+            lidar.stop()
+        except Exception:
+            pass
+        try:
+            lidar.set_motor_pwm(0)
+        except Exception:
+            pass
+        try:
+            lidar.disconnect()
+        except Exception:
+            pass
+
+    def _run(self):
+        if self.demo:
+            self._run_demo()
+            return
+        try:
+            from pyrplidar import PyRPlidar
+        except ImportError as exc:
+            with self._lock:
+                self._error = f"Missing pyrplidar package: {exc}"
+            return
+
+        lidar = PyRPlidar()
+        try:
+            lidar.connect(port=self.port, baudrate=self.baudrate, timeout=3)
+            self._lidar = lidar
+            info = lidar.get_info()
+            health = lidar.get_health()
+            with self._lock:
+                self._connected = True
+                self._error = None
+            print(f"RPLIDAR connected on {self.port} @ {self.baudrate}")
+            print(f"  info={info}  health={health}")
+
+            # S2 supports: mode 0 = Standard (broken), mode 1 = DenseBoost (correct)
+            # Try DenseBoost first, fall back to typical
+            scan_mode = 1  # DenseBoost
+            try:
+                typical_id = lidar.get_scan_mode_typical()
+                print(f"  device typical mode: {typical_id}, using mode: {scan_mode}")
+            except Exception:
+                print(f"  using mode: {scan_mode}")
+
+            lidar.set_motor_pwm(660)
+            time.sleep(1.0)
+
+            scan_gen = lidar.start_scan_express(scan_mode)
+
+            # Persistent buffer — one slot per ~0.08° (4500 slots for 360°).
+            NUM_SLOTS = 4500
+            buf = [None] * NUM_SLOTS
+            scan_times = []
+            prev_angle = -1.0
+            update_count = 0
+
+            for measurement in scan_gen():
+                if self._stop.is_set():
+                    break
+
+                angle = measurement.angle
+                dist = measurement.distance
+                quality = measurement.quality
+
+                if dist > 0:
+                    slot = int(angle * NUM_SLOTS / 360.0) % NUM_SLOTS
+                    buf[slot] = {
+                        "angle": round(angle, 2),
+                        "dist_mm": int(dist),
+                        "quality": int(quality),
+                    }
+                    update_count += 1
+
+                # Detect full revolution to update Hz counter
+                if prev_angle > 300 and angle < 60:
+                    now = time.perf_counter()
+                    if self._last_scan_time:
+                        scan_times.append(now - self._last_scan_time)
+                        if len(scan_times) > 20:
+                            scan_times.pop(0)
+                        self._scan_hz = 1.0 / (sum(scan_times) / len(scan_times))
+                    self._last_scan_time = now
+
+                prev_angle = angle
+
+                # Push snapshot to viewer every ~360 points
+                if update_count >= 360:
+                    update_count = 0
+                    snapshot = [p for p in buf if p is not None]
+                    with self._lock:
+                        self._scan = snapshot
+        except Exception as exc:
+            with self._lock:
+                self._connected = False
+                self._error = str(exc)
+            print(f"RPLIDAR error: {exc}", file=sys.stderr)
+            import traceback; traceback.print_exc()
+        finally:
+            self._disconnect()
+            with self._lock:
+                self._connected = False
+
+    def _run_demo(self):
+        """Synthetic scan for GUI testing without hardware."""
+        with self._lock:
+            self._connected = True
+            self._error = None
+        t0 = time.perf_counter()
+        phase = 0.0
+        while not self._stop.is_set():
+            phase += 0.08
+            points = []
+            for i in range(360):
+                angle = float(i)
+                base = 1200 + 400 * math.sin(math.radians(angle * 3 + phase * 40))
+                wobble = 180 * math.sin(math.radians(angle * 8 + phase * 90))
+                dist = max(200, int(base + wobble))
+                quality = 40 + int(20 * abs(math.sin(math.radians(angle + phase * 30))))
+                points.append({"angle": angle, "dist_mm": dist, "quality": quality})
+            with self._lock:
+                self._scan = points
+                self._scan_hz = 10.0
+            elapsed = time.perf_counter() - t0
+            if elapsed < 0.1:
+                time.sleep(0.1 - elapsed)
+            t0 = time.perf_counter()
+
+
+def main():
+    parser = argparse.ArgumentParser(description="RPLIDAR S2 serial reader")
+    parser.add_argument("--port", default=None, help="Serial port (e.g. COM3, /dev/ttyUSB0)")
+    parser.add_argument("--model", default="s2", choices=sorted(MODEL_BAUD),
+                        help="Lidar model for default baud rate")
+    parser.add_argument("--baudrate", type=int, default=None,
+                        help="Override serial baud rate")
+    parser.add_argument("--list-ports", action="store_true",
+                        help="List available serial ports and exit")
+    parser.add_argument("--demo", action="store_true",
+                        help="Run without hardware (synthetic scan)")
+    args = parser.parse_args()
+
+    if args.list_ports:
+        ports = list_serial_ports()
+        if not ports:
+            print("No serial ports found.")
+        else:
+            print("Available serial ports:")
+            for p in ports:
+                print(f"  {p}")
+        return
+
+    baud = args.baudrate or MODEL_BAUD[args.model]
+    scan_type = MODEL_SCAN_TYPE[args.model]
+    port = args.port
+    if not args.demo and not port:
+        ports = list_serial_ports()
+        if len(ports) == 1:
+            port = ports[0]
+            print(f"Auto-selected port: {port}")
+        else:
+            parser.error("Specify --port or use --demo. Run with --list-ports to see devices.")
+
+    reader = LidarReader(port or "demo", baudrate=baud, scan_type=scan_type, demo=args.demo)
+    reader.start()
+    print("Streaming scans (Ctrl+C to stop)...")
+    try:
+        while True:
+            snap = reader.get_scan()
+            if snap["error"] and not snap["connected"]:
+                print(f"Error: {snap['error']}")
+                break
+            dists = [p["dist_mm"] for p in snap["points"]]
+            if dists:
+                print(f"{snap['count']:4d} pts  {snap['scan_hz']:4.1f} Hz  "
+                      f"range {min(dists)/1000:.2f}-{max(dists)/1000:.2f} m")
+            time.sleep(0.5)
+    except KeyboardInterrupt:
+        print("\nStopping...")
+    finally:
+        reader.stop()
+
+
+if __name__ == "__main__":
+    main()

@@ -6,3 +6,5 @@ flask
 flask-cors
 python-can
 gs_usb
+pyserial
+pyrplidar

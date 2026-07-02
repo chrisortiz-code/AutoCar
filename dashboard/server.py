@@ -20,8 +20,6 @@ from http.server import BaseHTTPRequestHandler, HTTPServer
 from socketserver import ThreadingMixIn
 
 from camera.reader import CameraReader, list_realsense_devices
-from lidar.reader import LidarReader, MODEL_BAUD, MODEL_SCAN_TYPE, list_serial_ports
-from lidar.viewer import ScanServer
 
 PAGE_HTML = """<!DOCTYPE html>
 <html lang="en">
@@ -269,22 +267,17 @@ def main():
     parser.add_argument("--height", type=int, default=480)
     parser.add_argument("--fps", type=int, default=30)
     parser.add_argument("--no-camera", action="store_true", help="Disable camera")
-    # Lidar args
-    parser.add_argument("--lidar-port", default=None, help="Lidar serial port")
-    parser.add_argument("--lidar-model", default="s2", choices=sorted(MODEL_BAUD))
+    # Lidar is served separately via: python3 -m lidar.viewer
     parser.add_argument("--lidar-web-port", type=int, default=8092,
-                        help="HTTP port for the lidar viewer (default 8092)")
-    parser.add_argument("--no-lidar", action="store_true", help="Disable lidar")
+                        help="Port where lidar.viewer is running (default 8092)")
     # General
     parser.add_argument("--demo", action="store_true",
-                        help="Synthetic frames for both sensors (no hardware)")
+                        help="Synthetic camera frames (no hardware)")
     parser.add_argument("--web-port", type=int, default=8090,
                         help="HTTP server port for the dashboard")
     args = parser.parse_args()
 
     cam_reader = None
-    lidar_reader = None
-    lidar_server = None
 
     # Start camera
     if not args.no_camera:
@@ -298,35 +291,11 @@ def main():
         cam_reader.start()
         print("Camera: " + ("demo mode" if args.demo else "starting..."))
 
-    # Start lidar on its own port
-    if not args.no_lidar:
-        baud = MODEL_BAUD[args.lidar_model]
-        scan_type = MODEL_SCAN_TYPE[args.lidar_model]
-        serial_port = args.lidar_port
-        if not args.demo and not serial_port:
-            ports = list_serial_ports()
-            if len(ports) == 1:
-                serial_port = ports[0]
-                print(f"Lidar: auto-selected port {serial_port}")
-            elif len(ports) == 0:
-                print("Lidar: no serial ports found, skipping")
-            else:
-                print(f"Lidar: multiple ports found {ports}, use --lidar-port")
-        if args.demo or serial_port:
-            lidar_reader = LidarReader(
-                serial_port or "demo",
-                baudrate=baud,
-                scan_type=scan_type,
-                demo=args.demo,
-            )
-            lidar_reader.start()
-            lidar_server = ScanServer(lidar_reader, port=args.lidar_web_port)
-            print("Lidar: " + ("demo mode" if args.demo else f"{serial_port} @ {baud} baud"))
-            print(f"Lidar viewer at http://localhost:{args.lidar_web_port}")
-
-    server = DashboardServer(cam_reader, lidar_reader, port=args.web_port,
+    server = DashboardServer(cam_reader, None, port=args.web_port,
                              lidar_port=args.lidar_web_port)
     print(f"Dashboard at http://localhost:{args.web_port}")
+    print(f"Lidar expected at http://localhost:{args.lidar_web_port}")
+    print("  (start separately with: python3 -m lidar.viewer)")
     print("Ctrl+C to stop.")
 
     try:
@@ -337,10 +306,6 @@ def main():
     finally:
         if cam_reader:
             cam_reader.stop()
-        if lidar_reader:
-            lidar_reader.stop()
-        if lidar_server:
-            lidar_server.stop()
         server.stop()
         print("Done.")
 

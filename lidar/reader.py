@@ -158,6 +158,14 @@ class LidarReader:
             lidar.set_motor_pwm(0)
         except Exception:
             pass
+        # Flush any remaining serial data before closing
+        try:
+            if hasattr(lidar, '_serial') and lidar._serial:
+                lidar._serial.reset_input_buffer()
+                lidar._serial.reset_output_buffer()
+        except Exception:
+            pass
+        time.sleep(0.1)
         try:
             lidar.disconnect()
         except Exception:

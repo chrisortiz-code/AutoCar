@@ -224,7 +224,7 @@ class LidarReader:
                     }
                     update_count += 1
 
-                # Detect full revolution — publish current, start fresh
+                # Detect full revolution to update Hz counter
                 if prev_angle > 300 and angle < 60:
                     now = time.perf_counter()
                     if self._last_scan_time:
@@ -234,14 +234,14 @@ class LidarReader:
                         self._scan_hz = 1.0 / (sum(scan_times) / len(scan_times))
                     self._last_scan_time = now
 
-                    snapshot = [p for p in buf if p is not None]
-                    if len(snapshot) > 100:
-                        with self._lock:
-                            self._scan = snapshot
-                        buf = [None] * NUM_SLOTS
-                    update_count = 0
-
                 prev_angle = angle
+
+                # Push snapshot to viewer every ~360 points
+                if update_count >= 360:
+                    update_count = 0
+                    snapshot = [p for p in buf if p is not None]
+                    with self._lock:
+                        self._scan = snapshot
         except Exception as exc:
             with self._lock:
                 self._connected = False

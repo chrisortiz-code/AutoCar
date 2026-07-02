@@ -47,6 +47,8 @@ class CameraReader:
         self._rgb = None       # numpy BGR uint8
         self._depth = None     # numpy uint16 (mm)
         self._depth_color = None  # numpy BGR uint8 (colorized depth)
+        self._rgb_jpeg = None    # pre-encoded JPEG bytes
+        self._depth_jpeg = None  # pre-encoded JPEG bytes
         self._frame_count = 0
         self._fps_actual = 0.0
 
@@ -85,20 +87,14 @@ class CameraReader:
             }
 
     def get_rgb_jpeg(self, quality=80):
-        """Return latest RGB frame as JPEG bytes."""
+        """Return latest pre-encoded RGB JPEG bytes."""
         with self._lock:
-            if self._rgb is None:
-                return None
-            _, buf = cv2.imencode('.jpg', self._rgb, [cv2.IMWRITE_JPEG_QUALITY, quality])
-            return buf.tobytes()
+            return self._rgb_jpeg
 
     def get_depth_jpeg(self, quality=80):
-        """Return latest colorized depth frame as JPEG bytes."""
+        """Return latest pre-encoded depth JPEG bytes."""
         with self._lock:
-            if self._depth_color is None:
-                return None
-            _, buf = cv2.imencode('.jpg', self._depth_color, [cv2.IMWRITE_JPEG_QUALITY, quality])
-            return buf.tobytes()
+            return self._depth_jpeg
 
     def get_depth_raw_jpeg(self, quality=80):
         """Return latest depth frame colorized with inferno colormap as JPEG."""
@@ -164,10 +160,16 @@ class CameraReader:
                 depth = np.asanyarray(depth_frame.get_data())
                 depth_colored = np.asanyarray(colorizer.colorize(depth_frame).get_data())
 
+                # Pre-encode JPEGs outside the lock
+                _, rgb_buf = cv2.imencode('.jpg', rgb, [cv2.IMWRITE_JPEG_QUALITY, 70])
+                _, depth_buf = cv2.imencode('.jpg', depth_colored, [cv2.IMWRITE_JPEG_QUALITY, 70])
+
                 with self._lock:
                     self._rgb = rgb
                     self._depth = depth
                     self._depth_color = depth_colored
+                    self._rgb_jpeg = rgb_buf.tobytes()
+                    self._depth_jpeg = depth_buf.tobytes()
                     self._frame_count += 1
 
                 fps_count += 1
@@ -226,10 +228,15 @@ class CameraReader:
             depth_norm = cv2.normalize(depth, None, 0, 255, cv2.NORM_MINMAX).astype(np.uint8)
             depth_colored = cv2.applyColorMap(depth_norm, cv2.COLORMAP_JET)
 
+            _, rgb_buf = cv2.imencode('.jpg', rgb, [cv2.IMWRITE_JPEG_QUALITY, 70])
+            _, depth_buf = cv2.imencode('.jpg', depth_colored, [cv2.IMWRITE_JPEG_QUALITY, 70])
+
             with self._lock:
                 self._rgb = rgb
                 self._depth = depth
                 self._depth_color = depth_colored
+                self._rgb_jpeg = rgb_buf.tobytes()
+                self._depth_jpeg = depth_buf.tobytes()
                 self._frame_count += 1
 
             fps_count += 1

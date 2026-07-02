@@ -215,7 +215,7 @@ class LidarReader:
                 dist = measurement.distance
                 quality = measurement.quality
 
-                if dist > 0:
+                if dist > 0 and quality >= 10:
                     slot = int(angle * NUM_SLOTS / 360.0) % NUM_SLOTS
                     buf[slot] = {
                         "angle": round(angle, 2),

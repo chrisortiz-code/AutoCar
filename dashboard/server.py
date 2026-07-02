@@ -128,13 +128,30 @@ document.querySelectorAll('.toggle-btn').forEach(btn => {
   });
 });
 
-// --- Camera feeds ---
-function refreshFeeds() {
-  const t = Date.now();
-  if (!document.getElementById('feed-rgb').classList.contains('hidden'))
-    rgbImg.src = '/rgb.jpg?t=' + t;
-  if (!document.getElementById('feed-depth').classList.contains('hidden'))
-    depthImg.src = '/depth.jpg?t=' + t;
+// --- Camera feeds (wait for load before next request) ---
+let rgbBusy = false, depthBusy = false;
+
+function refreshRgb() {
+  if (rgbBusy || document.getElementById('feed-rgb').classList.contains('hidden')) {
+    setTimeout(refreshRgb, 200); return;
+  }
+  rgbBusy = true;
+  const img = new Image();
+  img.onload = img.onerror = () => { rgbBusy = false; setTimeout(refreshRgb, 150); };
+  img.src = '/rgb.jpg?t=' + Date.now();
+  img.onload = function() { rgbImg.src = img.src; rgbBusy = false; setTimeout(refreshRgb, 150); };
+  img.onerror = () => { rgbBusy = false; setTimeout(refreshRgb, 500); };
+}
+
+function refreshDepth() {
+  if (depthBusy || document.getElementById('feed-depth').classList.contains('hidden')) {
+    setTimeout(refreshDepth, 200); return;
+  }
+  depthBusy = true;
+  const img = new Image();
+  img.onload = function() { depthImg.src = img.src; depthBusy = false; setTimeout(refreshDepth, 150); };
+  img.onerror = () => { depthBusy = false; setTimeout(refreshDepth, 500); };
+  img.src = '/depth.jpg?t=' + Date.now();
 }
 
 async function pollStatus() {
@@ -165,9 +182,9 @@ async function pollStatus() {
   } catch (e) {}
 }
 
-setInterval(refreshFeeds, 100);
+refreshRgb();
+refreshDepth();
 setInterval(pollStatus, 1000);
-refreshFeeds();
 pollStatus();
 
 // --- Lidar polar plot ---
@@ -246,16 +263,21 @@ function drawScan(points) {
 
 drawGrid(rangeM);
 
+let lidarBusy = false;
 async function pollLidar() {
-  if (document.getElementById('feed-lidar').classList.contains('hidden')) return;
+  if (lidarBusy || document.getElementById('feed-lidar').classList.contains('hidden')) {
+    setTimeout(pollLidar, 200); return;
+  }
+  lidarBusy = true;
   try {
     const r = await fetch('/scan');
     const s = await r.json();
     drawScan(s.points || []);
   } catch (e) {}
+  lidarBusy = false;
+  setTimeout(pollLidar, 150);
 }
 
-setInterval(pollLidar, 100);
 pollLidar();
 </script>
 </body>

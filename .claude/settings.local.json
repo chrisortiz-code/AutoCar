@@ -20,7 +20,10 @@
       "Bash(netstat:*)",
       "Bash(wmic process:*)",
       "Bash(taskkill:*)",
-      "Bash(powershell:*)"
+      "Bash(powershell:*)",
+      "Bash(xargs grep:*)",
+      "WebSearch",
+      "Bash(powershell.exe:*)"
     ]
   }
 }

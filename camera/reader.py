@@ -96,6 +96,48 @@ class CameraReader:
         with self._lock:
             return self._depth_jpeg
 
+    def get_depth_points(self, step=8):
+        """Return downsampled 3D point cloud from depth frame.
+
+        Uses pinhole camera model with hardcoded D435 intrinsics for 640x480.
+        Returns dict with 'points' [[x,y,z],...] in mm and 'rgb' [[r,g,b],...].
+        """
+        with self._lock:
+            if self._depth is None:
+                return {"points": [], "rgb": []}
+            depth = self._depth.copy()
+            rgb = self._rgb.copy() if self._rgb is not None else None
+
+        h, w = depth.shape[:2]
+        # D435 approximate intrinsics for 640x480
+        fx, fy = 615.0, 615.0
+        cx, cy = w / 2.0, h / 2.0
+
+        # Build pixel coordinate grids (downsampled)
+        vs = np.arange(0, h, step)
+        us = np.arange(0, w, step)
+        uu, vv = np.meshgrid(us, vs)
+        uu = uu.ravel()
+        vv = vv.ravel()
+
+        z = depth[vv, uu].astype(np.float64)
+        # Filter out zero/invalid depth
+        valid = z > 0
+        uu, vv, z = uu[valid], vv[valid], z[valid]
+
+        x = (uu - cx) * z / fx
+        y = (vv - cy) * z / fy
+
+        points = np.stack([x, y, z], axis=1).tolist()
+
+        if rgb is not None:
+            # OpenCV is BGR, convert to RGB
+            colors = rgb[vv, uu][:, ::-1].tolist()
+        else:
+            colors = [[128, 128, 128]] * len(points)
+
+        return {"points": points, "rgb": colors}
+
     def get_depth_raw_jpeg(self, quality=80):
         """Return latest depth frame colorized with inferno colormap as JPEG."""
         with self._lock:
@@ -204,25 +246,36 @@ class CameraReader:
         while not self._stop.is_set():
             phase += 0.05
 
-            # Synthetic RGB: shifting color gradient
-            rgb = np.zeros((self.height, self.width, 3), dtype=np.uint8)
-            for y in range(self.height):
-                r = int(127 + 127 * math.sin(y / 40.0 + phase))
-                g = int(127 + 127 * math.sin(y / 60.0 + phase * 1.3))
-                b = int(127 + 127 * math.sin(y / 80.0 + phase * 0.7))
-                rgb[y, :] = (b, g, r)
-            # Add some moving circles
-            cx = int(self.width / 2 + 100 * math.sin(phase * 2))
-            cy = int(self.height / 2 + 80 * math.cos(phase * 1.5))
-            cv2.circle(rgb, (cx, cy), 40, (0, 255, 0), -1)
-            cv2.circle(rgb, (self.width - cx, self.height - cy), 30, (255, 0, 0), -1)
+            w, h = self.width, self.height
+            y_grid, x_grid = np.mgrid[0:h, 0:w]
 
-            # Synthetic depth: radial gradient with moving center
-            y_grid, x_grid = np.mgrid[0:self.height, 0:self.width]
-            dcx = self.width / 2 + 50 * math.sin(phase)
-            dcy = self.height / 2 + 50 * math.cos(phase)
-            dist = np.sqrt((x_grid - dcx) ** 2 + (y_grid - dcy) ** 2)
-            depth = (dist * 5 + 500).astype(np.uint16)  # mm
+            # Two "objects" that move — shared between RGB and depth
+            obj1_x = int(w / 2 + 100 * math.sin(phase))
+            obj1_y = int(h / 2 + 80 * math.cos(phase))
+            obj2_x = int(w / 4 + 60 * math.cos(phase * 0.7))
+            obj2_y = int(h / 3 + 50 * math.sin(phase * 0.9))
+
+            # Synthetic depth: objects are "bumps" closer to camera on a back wall
+            wall_z = 3000  # back wall at 3m
+            dist1 = np.sqrt((x_grid - obj1_x) ** 2 + (y_grid - obj1_y) ** 2).astype(np.float64)
+            dist2 = np.sqrt((x_grid - obj2_x) ** 2 + (y_grid - obj2_y) ** 2).astype(np.float64)
+            depth_f = np.full((h, w), wall_z, dtype=np.float64)
+            # Object 1: sphere-like bump at ~1m, radius 80px
+            bump1 = np.clip(1.0 - dist1 / 80.0, 0, 1)
+            depth_f -= bump1 * 2000  # brings it to ~1m
+            # Object 2: smaller bump at ~1.5m, radius 50px
+            bump2 = np.clip(1.0 - dist2 / 50.0, 0, 1)
+            depth_f -= bump2 * 1500  # brings it to ~1.5m
+            depth = np.clip(depth_f, 200, 10000).astype(np.uint16)
+
+            # Synthetic RGB: flat room color with colored objects matching depth
+            rgb = np.full((h, w, 3), (60, 55, 50), dtype=np.uint8)  # grey-brown wall (BGR)
+            # Object 1: green sphere
+            mask1 = dist1 < 80
+            rgb[mask1] = (30, 200, 50)
+            # Object 2: blue box
+            mask2 = dist2 < 50
+            rgb[mask2] = (200, 80, 30)
 
             # Colorize depth for display
             depth_norm = cv2.normalize(depth, None, 0, 255, cv2.NORM_MINMAX).astype(np.uint8)

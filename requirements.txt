@@ -8,3 +8,4 @@ python-can
 gs_usb
 pyserial
 pyrplidar
+pyrealsense2

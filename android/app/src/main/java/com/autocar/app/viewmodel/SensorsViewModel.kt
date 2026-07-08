@@ -28,6 +28,15 @@ class SensorsViewModel(app: Application) : AndroidViewModel(app) {
     private val _depthUrl = MutableStateFlow("")
     val depthUrl: StateFlow<String> = _depthUrl.asStateFlow()
 
+    init {
+        // Set camera URLs eagerly so they're available before SensorViewport is composed
+        viewModelScope.launch {
+            val baseUrl = store.baseUrl.first()
+            _cameraUrl.value = baseUrl.trimEnd('/') + "/api/sensors/camera/rgb"
+            _depthUrl.value = baseUrl.trimEnd('/') + "/api/sensors/camera/depth"
+        }
+    }
+
     fun connect() = viewModelScope.launch {
         val baseUrl = store.baseUrl.first()
         val token = store.token.first()

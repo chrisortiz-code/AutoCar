@@ -4,12 +4,14 @@ import android.app.Application
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.autocar.app.data.settings.SettingsStore
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 class SettingsViewModel(app: Application) : AndroidViewModel(app) {
 
@@ -37,13 +39,16 @@ class SettingsViewModel(app: Application) : AndroidViewModel(app) {
     fun checkConnection() = viewModelScope.launch {
         try {
             val url = baseUrl.value
-            val client = okhttp3.OkHttpClient.Builder()
-                .connectTimeout(3, java.util.concurrent.TimeUnit.SECONDS)
-                .build()
-            val request = okhttp3.Request.Builder().url(url).build()
-            val response = client.newCall(request).execute()
-            _connected.value = response.isSuccessful
-            response.close()
+            _connected.value = withContext(Dispatchers.IO) {
+                val client = okhttp3.OkHttpClient.Builder()
+                    .connectTimeout(3, java.util.concurrent.TimeUnit.SECONDS)
+                    .build()
+                val request = okhttp3.Request.Builder().url(url).build()
+                val response = client.newCall(request).execute()
+                val success = response.isSuccessful
+                response.close()
+                success
+            }
         } catch (_: Exception) {
             _connected.value = false
         }

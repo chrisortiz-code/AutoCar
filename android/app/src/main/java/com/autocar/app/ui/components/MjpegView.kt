@@ -6,6 +6,7 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
@@ -97,7 +98,7 @@ fun MjpegView(url: String, modifier: Modifier = Modifier) {
     ) {
         val currentBitmap = bitmap
         when {
-            error != null -> Text("Camera error: $error")
+            error != null -> Text("Camera error: $error", color = MaterialTheme.colorScheme.error)
             currentBitmap != null -> Image(
                 bitmap = currentBitmap.asImageBitmap(),
                 contentDescription = "Camera feed",

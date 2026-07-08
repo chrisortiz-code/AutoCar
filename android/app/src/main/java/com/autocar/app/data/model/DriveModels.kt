@@ -19,11 +19,23 @@ data class TranslateRotateMove(
 )
 
 @Serializable
+data class MotorDetail(
+    val role: String = "",
+    val armed: Boolean = false,
+    val error: Int = 0,
+    val current: Float = 0f,
+    val position: Float = 0f,
+    val axis_state: Int = 0,
+)
+
+@Serializable
 data class DriveStatus(
     val connected: List<Int> = emptyList(),
+    val armed: List<Int> = emptyList(),
     val moving: Boolean = false,
-    val position: Float = 0f,
-    val motors: Map<String, String> = emptyMap(),
+    val motors: Map<String, MotorDetail> = emptyMap(),
+    val receiver_online: Boolean = false,
+    val uptime: Float = 0f,
 )
 
 @Serializable

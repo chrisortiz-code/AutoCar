@@ -33,16 +33,33 @@ data class LidarScan(
 )
 
 @Serializable
+data class LidarPoint(
+    val angle: Float = 0f,
+    val dist_mm: Float = 0f,
+    val quality: Int = 0,
+)
+
+@Serializable
+data class MotorsWsData(
+    val connected: List<Int> = emptyList(),
+    val armed: List<Int> = emptyList(),
+    val motors: Map<String, MotorDetail> = emptyMap(),
+    val receiver_online: Boolean = false,
+    val uptime: Float = 0f,
+)
+
+@Serializable
 data class SensorUpdate(
     val type: String = "",
     val lidar: LidarWsData? = null,
     val camera: CameraWsData? = null,
     val drive: DriveWsData? = null,
+    val motors: MotorsWsData? = null,
 )
 
 @Serializable
 data class LidarWsData(
-    val points: List<List<Float>> = emptyList(),
+    val points: List<LidarPoint> = emptyList(),
     val scan_hz: Float = 0f,
     val connected: Boolean = false,
 )

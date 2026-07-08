@@ -49,6 +49,15 @@ class DriveViewModel(app: Application) : AndroidViewModel(app) {
                 update.drive?.let { drive ->
                     _driveStatus.value = _driveStatus.value.copy(moving = drive.moving)
                 }
+                update.motors?.let { m ->
+                    _driveStatus.value = _driveStatus.value.copy(
+                        connected = m.connected,
+                        armed = m.armed,
+                        motors = m.motors,
+                        receiver_online = m.receiver_online,
+                        uptime = m.uptime,
+                    )
+                }
             }
         } catch (_: Exception) {
             _wsConnected.value = false

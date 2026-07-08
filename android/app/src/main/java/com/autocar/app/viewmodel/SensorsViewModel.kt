@@ -25,11 +25,15 @@ class SensorsViewModel(app: Application) : AndroidViewModel(app) {
     private val _cameraUrl = MutableStateFlow("")
     val cameraUrl: StateFlow<String> = _cameraUrl.asStateFlow()
 
+    private val _depthUrl = MutableStateFlow("")
+    val depthUrl: StateFlow<String> = _depthUrl.asStateFlow()
+
     fun connect() = viewModelScope.launch {
         val baseUrl = store.baseUrl.first()
         val token = store.token.first()
 
         _cameraUrl.value = baseUrl.trimEnd('/') + "/api/sensors/camera/rgb"
+        _depthUrl.value = baseUrl.trimEnd('/') + "/api/sensors/camera/depth"
 
         val client = ApiClient.okHttpClient(token)
         sensorSocket = SensorSocket(client)

@@ -9,6 +9,7 @@ Packet types:
   E  — emergency stop
 """
 
+import json
 import math
 import os
 import socket
@@ -54,6 +55,20 @@ _udp_dest = (UDP_HOST, UDP_PORT)
 def udp_dest():
     """Return the current UDP destination tuple."""
     return _udp_dest
+
+
+def query_motor_status(timeout=0.3):
+    """Send b'?' to RELAY_PORT and return parsed JSON, or a fallback dict."""
+    sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    sock.settimeout(timeout)
+    try:
+        sock.sendto(b"?", (UDP_HOST, RELAY_PORT))
+        data, _ = sock.recvfrom(4096)
+        return json.loads(data.decode())
+    except (socket.timeout, OSError, json.JSONDecodeError):
+        return {"connected": [], "error": "receiver not responding"}
+    finally:
+        sock.close()
 
 
 def send_drive(vx, vy, trans_speed, rot_speed):

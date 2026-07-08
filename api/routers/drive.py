@@ -12,7 +12,7 @@ from api.auth import require_auth
 from api.udp import (
     ALL_IDS, MOTORS, MOTOR_REVS_PER_CM_COMP, TURNS_PER_DEG,
     mecanum_speeds, send_drive, send_wheels, send_stop, send_estop,
-    run_move, run_translate_rotate,
+    run_move, run_translate_rotate, query_motor_status,
 )
 
 router = APIRouter(prefix="/api/drive", tags=["drive"], dependencies=[Depends(require_auth)])
@@ -159,9 +159,28 @@ def estop():
 
 @router.get("/status")
 def status():
+    raw = query_motor_status()
+    receiver_online = "error" not in raw
+    connected = raw.get("connected", [])
+    armed = raw.get("armed", [])
+
+    motors = {}
+    for nid in ALL_IDS:
+        nid_str = str(nid)
+        motors[nid_str] = {
+            "role": MOTORS[nid]["role"],
+            "armed": nid in armed,
+            "error": raw.get("errors", {}).get(nid_str, 0),
+            "current": raw.get("currents", {}).get(nid_str, 0.0),
+            "position": raw.get("positions", {}).get(nid_str, 0.0),
+            "axis_state": raw.get("axis_states", {}).get(nid_str, 0),
+        }
+
     return {
-        "connected": sorted(ALL_IDS),
-        "moving": _moving,
-        "position": 0.0,
-        "motors": {nid: MOTORS[nid]["role"] for nid in ALL_IDS},
+        "connected": connected,
+        "armed": armed,
+        "moving": _moving or raw.get("driving", False),
+        "motors": motors,
+        "receiver_online": receiver_online,
+        "uptime": raw.get("uptime", 0.0),
     }

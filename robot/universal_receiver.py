@@ -6,21 +6,24 @@ the shared D/S/E/Q packet format.
 Usage:  python universal_receiver.py
 """
 
+import json
 import signal
 import socket
 import struct
 import threading
 import time
 
-from can_bus import MecanumCAN
+from can_bus import MecanumCAN, MOTORS
 
 LISTEN_PORT = 5555
+RELAY_PORT = 5556
 TIMEOUT = 0.5      # no packet for this long -> safety stop
 LOG_INTERVAL = 0.2 # seconds between amperage/status prints
 CURRENT_SPIKE_THRESHOLD = 8.0  # amps above the average of other motors = stall
 CURRENT_CHECK_INTERVAL = 0.15
 
 _shutdown_event = threading.Event()
+_start_time = time.time()
 
 
 def check_current_spike(mc):
@@ -34,6 +37,40 @@ def check_current_spike(mc):
         if amps > avg_others + CURRENT_SPIKE_THRESHOLD and amps > 5.0:
             return nid, amps
     return None
+
+
+def _status_responder(mc, driving_ref):
+    """Thread: listen on RELAY_PORT, reply to b'?' with JSON motor state."""
+    sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    sock.bind(("0.0.0.0", RELAY_PORT))
+    sock.settimeout(1.0)
+    print(f"Status responder on UDP :{RELAY_PORT}")
+
+    while not _shutdown_event.is_set():
+        try:
+            data, addr = sock.recvfrom(64)
+        except socket.timeout:
+            continue
+        except OSError:
+            break
+
+        if data == b"?":
+            status = {
+                "connected": sorted(mc.connected),
+                "armed": sorted(mc.armed),
+                "errors": {str(n): mc.errors.get(n, 0) for n in range(4)},
+                "axis_states": {str(n): mc.axis_states.get(n, 0) for n in range(4)},
+                "positions": {str(n): mc.positions.get(n, 0.0) for n in range(4)},
+                "currents": {str(n): mc.currents.get(n, 0.0) for n in range(4)},
+                "driving": driving_ref(),
+                "uptime": round(time.time() - _start_time, 1),
+            }
+            try:
+                sock.sendto(json.dumps(status).encode(), addr)
+            except OSError:
+                pass
+
+    sock.close()
 
 
 def main():
@@ -66,10 +103,19 @@ def main():
     signal.signal(signal.SIGTERM, signal_handler)
     signal.signal(signal.SIGINT, signal_handler)
 
+    # Start status responder thread
+    driving = False
+
+    def _driving_ref():
+        return driving
+
+    threading.Thread(
+        target=_status_responder, args=(mc, _driving_ref), daemon=True,
+    ).start()
+
     print(f"\nListening on UDP :{LISTEN_PORT}")
     print("Waiting for controller packets from PS4/camera/GUI...\n")
 
-    driving = False
     last_log = 0.0
 
     try:

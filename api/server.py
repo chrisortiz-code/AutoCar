@@ -119,9 +119,21 @@ def configure(*, demo=False, no_camera=False, no_lidar=False):
     app.state.lidar = lidar
 
 
-@app.on_event("shutdown")
-def shutdown():
+def _cleanup():
+    """Stop hardware readers — called on shutdown and atexit."""
     if hasattr(app.state, "camera") and app.state.camera:
         app.state.camera.stop()
+        app.state.camera = None
     if hasattr(app.state, "lidar") and app.state.lidar:
         app.state.lidar.stop()
+        app.state.lidar = None
+
+
+@app.on_event("shutdown")
+def shutdown():
+    _cleanup()
+
+
+# atexit ensures motor stops even if uvicorn doesn't fire shutdown event
+import atexit
+atexit.register(_cleanup)

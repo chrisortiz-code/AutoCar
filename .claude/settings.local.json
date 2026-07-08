@@ -23,7 +23,9 @@
       "Bash(powershell:*)",
       "Bash(xargs grep:*)",
       "WebSearch",
-      "Bash(powershell.exe:*)"
+      "Bash(powershell.exe:*)",
+      "WebFetch(domain:github.com)",
+      "Bash(git:*)"
     ]
   }
 }

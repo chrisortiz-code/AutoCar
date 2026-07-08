@@ -9,3 +9,6 @@ gs_usb
 pyserial
 pyrplidar
 pyrealsense2
+fastapi
+uvicorn[standard]
+websockets

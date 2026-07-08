@@ -4,3 +4,11 @@ __pycache__/
 .idea/
 paths.db
 *.pt
+
+# Android
+android/.gradle/
+android/build/
+android/app/build/
+android/app/.cxx/
+android/local.properties
+*.apk

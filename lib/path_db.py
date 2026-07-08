@@ -76,6 +76,15 @@ def get_path(path_id):
     }
 
 
+def rename_path(path_id, name):
+    with _lock:
+        db = _read_db()
+        p = db["paths"].get(str(path_id))
+        if p:
+            p["name"] = name
+            _write_db(db)
+
+
 def delete_path(path_id):
     with _lock:
         db = _read_db()

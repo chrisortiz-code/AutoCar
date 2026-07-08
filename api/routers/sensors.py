@@ -10,9 +10,12 @@ from fastapi import APIRouter, Depends, WebSocket, WebSocketDisconnect
 from fastapi.responses import StreamingResponse
 
 from api.auth import require_auth
-from api.udp import send_drive, send_stop, send_estop
+from api.udp import send_drive, send_stop, send_estop, query_motor_status, ALL_IDS, MOTORS
 
 router = APIRouter(prefix="/api", tags=["sensors"], dependencies=[Depends(require_auth)])
+
+# Separate router for WebSocket — HTTPBearer auth doesn't work with WebSocket connections
+ws_router = APIRouter(prefix="/api", tags=["sensors"])
 
 # Sensor readers are injected by server.py at startup
 _camera = None  # CameraReader instance
@@ -110,7 +113,7 @@ def camera_points(step: int = 8):
 
 # ── WebSocket — real-time sensor push ─────────────────────────────────
 
-@router.websocket("/ws/sensors")
+@ws_router.websocket("/ws/sensors")
 async def ws_sensors(websocket: WebSocket):
     await websocket.accept()
 
@@ -145,6 +148,32 @@ async def ws_sensors(websocket: WebSocket):
             msg["drive"] = {
                 "moving": is_moving(),
                 "mode": path_state.get("status", "idle"),
+            }
+
+            # Motor status from receiver
+            raw = await asyncio.get_event_loop().run_in_executor(
+                None, query_motor_status
+            )
+            receiver_online = "error" not in raw
+            connected = raw.get("connected", [])
+            armed = raw.get("armed", [])
+            motors = {}
+            for nid in ALL_IDS:
+                nid_str = str(nid)
+                motors[nid_str] = {
+                    "role": MOTORS[nid]["role"],
+                    "armed": nid in armed,
+                    "error": raw.get("errors", {}).get(nid_str, 0),
+                    "current": raw.get("currents", {}).get(nid_str, 0.0),
+                    "position": raw.get("positions", {}).get(nid_str, 0.0),
+                    "axis_state": raw.get("axis_states", {}).get(nid_str, 0),
+                }
+            msg["motors"] = {
+                "connected": connected,
+                "armed": armed,
+                "motors": motors,
+                "receiver_online": receiver_online,
+                "uptime": raw.get("uptime", 0.0),
             }
 
             await websocket.send_json(msg)

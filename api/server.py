@@ -40,12 +40,13 @@ app.add_middleware(
 
 from api.routers.drive import router as drive_router
 from api.routers.paths import router as paths_router
-from api.routers.sensors import router as sensors_router
+from api.routers.sensors import router as sensors_router, ws_router as sensors_ws_router
 from api.routers.face import router as face_router
 
 app.include_router(drive_router)
 app.include_router(paths_router)
 app.include_router(sensors_router)
+app.include_router(sensors_ws_router)
 app.include_router(face_router)
 
 

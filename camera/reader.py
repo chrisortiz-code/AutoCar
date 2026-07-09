@@ -28,7 +28,7 @@ def _fill_depth_holes(depth, iterations=3):
     Uses iterative dilation: each pass spreads valid pixels into adjacent zeros.
     """
     filled = depth.copy()
-    kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5, 5))
+    kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3))
     for _ in range(iterations):
         mask = (filled == 0).astype(np.uint8)
         if not mask.any():
@@ -161,7 +161,7 @@ class CameraReader:
                 return None
             filled = _fill_depth_holes(self._depth)
             norm = cv2.normalize(filled, None, 0, 255, cv2.NORM_MINMAX).astype(np.uint8)
-            colored = cv2.applyColorMap(norm, cv2.COLORMAP_INFERNO)
+            colored = cv2.applyColorMap(255 - norm, cv2.COLORMAP_INFERNO)
             _, buf = cv2.imencode('.jpg', colored, [cv2.IMWRITE_JPEG_QUALITY, quality])
             return buf.tobytes()
 
@@ -220,10 +220,8 @@ class CameraReader:
 
                 # Fill invalid (zero) depth pixels with nearest valid neighbors
                 depth_filled = _fill_depth_holes(depth)
-                depth_colored = cv2.applyColorMap(
-                    cv2.normalize(depth_filled, None, 0, 255, cv2.NORM_MINMAX).astype(np.uint8),
-                    cv2.COLORMAP_JET,
-                )
+                depth_norm = cv2.normalize(depth_filled, None, 0, 255, cv2.NORM_MINMAX).astype(np.uint8)
+                depth_colored = cv2.applyColorMap(255 - depth_norm, cv2.COLORMAP_JET)
 
                 # Pre-encode JPEGs outside the lock
                 _, rgb_buf = cv2.imencode('.jpg', rgb, [cv2.IMWRITE_JPEG_QUALITY, 70])
@@ -302,7 +300,7 @@ class CameraReader:
 
             # Colorize depth for display
             depth_norm = cv2.normalize(depth, None, 0, 255, cv2.NORM_MINMAX).astype(np.uint8)
-            depth_colored = cv2.applyColorMap(depth_norm, cv2.COLORMAP_JET)
+            depth_colored = cv2.applyColorMap(255 - depth_norm, cv2.COLORMAP_JET)
 
             _, rgb_buf = cv2.imencode('.jpg', rgb, [cv2.IMWRITE_JPEG_QUALITY, 70])
             _, depth_buf = cv2.imencode('.jpg', depth_colored, [cv2.IMWRITE_JPEG_QUALITY, 70])

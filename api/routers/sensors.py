@@ -14,8 +14,8 @@ from api.udp import send_drive, send_stop, send_estop, query_motor_status, ALL_I
 
 router = APIRouter(prefix="/api", tags=["sensors"], dependencies=[Depends(require_auth)])
 
-# Separate router for WebSocket — HTTPBearer auth doesn't work with WebSocket connections
-ws_router = APIRouter(prefix="/api", tags=["sensors"])
+# Separate router for streams/WebSocket — no HTTPBearer auth
+stream_router = APIRouter(prefix="/api", tags=["sensors"])
 
 # Sensor readers are injected by server.py at startup
 _camera = None  # CameraReader instance
@@ -69,7 +69,7 @@ def lidar_scan():
     return _lidar.get_scan()
 
 
-# ── Camera MJPEG streams ─────────────────────────────────────────────
+# ── Camera MJPEG streams (on stream_router — no auth) ────────────────
 
 def _mjpeg_generator(get_jpeg_fn, fps=15):
     """Yield MJPEG frames from a callable that returns JPEG bytes."""
@@ -84,7 +84,7 @@ def _mjpeg_generator(get_jpeg_fn, fps=15):
         time.sleep(interval)
 
 
-@router.get("/sensors/camera/rgb", dependencies=[])  # skip auth for streams
+@stream_router.get("/sensors/camera/rgb")
 def camera_rgb():
     if not _camera:
         return {"error": "camera disabled"}
@@ -94,7 +94,7 @@ def camera_rgb():
     )
 
 
-@router.get("/sensors/camera/depth", dependencies=[])
+@stream_router.get("/sensors/camera/depth")
 def camera_depth():
     if not _camera:
         return {"error": "camera disabled"}
@@ -113,7 +113,7 @@ def camera_points(step: int = 8):
 
 # ── WebSocket — real-time sensor push ─────────────────────────────────
 
-@ws_router.websocket("/ws/sensors")
+@stream_router.websocket("/ws/sensors")
 async def ws_sensors(websocket: WebSocket):
     await websocket.accept()
 

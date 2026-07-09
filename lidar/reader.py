@@ -99,11 +99,12 @@ def list_serial_ports():
 class LidarReader:
     """Background scan reader for RPLIDAR devices."""
 
-    def __init__(self, port, *, baudrate=1_000_000, scan_type='express', demo=False):
+    def __init__(self, port, *, baudrate=1_000_000, scan_type='express', demo=False, motor_pwm=660):
         self.port = port
         self.baudrate = baudrate
         self.scan_type = scan_type
         self.demo = demo
+        self.motor_pwm = motor_pwm
         self._lidar = None
         self._lock = threading.Lock()
         self._stop = threading.Event()
@@ -229,7 +230,8 @@ class LidarReader:
             except Exception:
                 print(f"  using mode: {scan_mode}")
 
-            lidar.set_motor_pwm(660)
+            lidar.set_motor_pwm(self.motor_pwm)
+            print(f"  motor PWM: {self.motor_pwm}")
             time.sleep(1.0)
 
             scan_gen = lidar.start_scan_express(scan_mode)
@@ -326,6 +328,8 @@ def main():
                         help="List available serial ports and exit")
     parser.add_argument("--gpio", action="store_true",
                         help=f"Use Jetson UART GPIO pins ({JETSON_UART}) instead of USB")
+    parser.add_argument("--motor-pwm", type=int, default=660,
+                        help="Motor PWM (lower = slower spin, default 660)")
     parser.add_argument("--demo", action="store_true",
                         help="Run without hardware (synthetic scan)")
     args = parser.parse_args()
@@ -354,7 +358,7 @@ def main():
         else:
             parser.error("Specify --port, --gpio, or use --demo. Run with --list-ports to see devices.")
 
-    reader = LidarReader(port or "demo", baudrate=baud, scan_type=scan_type, demo=args.demo)
+    reader = LidarReader(port or "demo", baudrate=baud, scan_type=scan_type, demo=args.demo, motor_pwm=args.motor_pwm)
     reader.start()
     print("Streaming scans (Ctrl+C to stop)...")
     try:

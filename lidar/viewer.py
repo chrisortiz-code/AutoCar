@@ -127,22 +127,26 @@ function drawGrid(maxM) {
   ctx.fill();
 }
 
+const MIN_POINTS = 20;  // ignore scans with fewer valid points
+const MIN_RANGE_M = 1.0;
+
 function drawScan(points) {
-  if (!points.length) { drawGrid(rangeM); return; }
+  // Filter to valid points and reject sparse scans
+  const valid = points.filter(p => p.dist_mm > 0);
+  if (valid.length < MIN_POINTS) { drawGrid(rangeM); return; }
   let maxDist = 0;
-  for (const p of points) {
+  for (const p of valid) {
     if (p.dist_mm > maxDist) maxDist = p.dist_mm;
   }
   const dataMaxM = maxDist / 1000;
-  const targetM = dataMaxM * 1.1;  // 10% margin
+  const targetM = Math.max(MIN_RANGE_M, dataMaxM * 1.1);
   // Smooth transitions: ease toward target
   rangeM = rangeM + (targetM - rangeM) * 0.3;
-  if (rangeM < 0.5) rangeM = 0.5;
+  if (rangeM < MIN_RANGE_M) rangeM = MIN_RANGE_M;
 
   drawGrid(rangeM);
-  for (const p of points) {
+  for (const p of valid) {
     const m = p.dist_mm / 1000;
-    if (m <= 0) continue;
     const rad = (p.angle - 90) * Math.PI / 180;
     const r = (m / rangeM) * R_MAX;
     const x = CX + r * Math.cos(rad);
@@ -154,9 +158,14 @@ function drawScan(points) {
 
 drawGrid(rangeM);
 
+let pollTimer = null;
+
 async function poll() {
   try {
-    const r = await fetch('/scan');
+    const ctrl = new AbortController();
+    const tid = setTimeout(() => ctrl.abort(), 3000);
+    const r = await fetch('/scan', { signal: ctrl.signal });
+    clearTimeout(tid);
     const s = await r.json();
     sCnt.textContent = s.count;
     sHz.textContent = s.scan_hz ? s.scan_hz.toFixed(1) : '--';
@@ -176,10 +185,20 @@ async function poll() {
       errEl.textContent = s.error || 'waiting for lidar...';
     }
     drawScan(s.points || []);
-  } catch (e) {}
+    schedulePoll(100);
+  } catch (e) {
+    badge.textContent = 'reconnecting';
+    badge.className = 'err';
+    errEl.textContent = 'connection lost — retrying...';
+    schedulePoll(2000);
+  }
 }
 
-setInterval(poll, 100);
+function schedulePoll(ms) {
+  if (pollTimer) clearTimeout(pollTimer);
+  pollTimer = setTimeout(poll, ms);
+}
+
 poll();
 </script>
 </body>

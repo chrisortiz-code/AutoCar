@@ -234,8 +234,17 @@ class LidarReader:
             print(f"  motor PWM: {self.motor_pwm}")
             time.sleep(1.0)
 
+            resync_count = 0
             while not self._stop.is_set():
-                self._run_scan_loop(lidar, scan_mode)
+                try:
+                    self._run_scan_loop(lidar, scan_mode)
+                    resync_count = 0
+                except Exception as e:
+                    resync_count += 1
+                    print(f"  scan restart failed ({e}), attempt {resync_count}...")
+                    self._resync(lidar)
+                    if resync_count >= 10:
+                        raise RuntimeError(f"Too many resync failures: {e}")
         except Exception as exc:
             with self._lock:
                 self._connected = False
@@ -320,11 +329,24 @@ class LidarReader:
             lidar.stop()
         except Exception:
             pass
-        try:
-            if hasattr(lidar, '_serial') and lidar._serial:
-                lidar._serial.reset_input_buffer()
-        except Exception:
-            pass
+        # Drain and flush repeatedly to clear all in-flight data
+        ser = getattr(lidar, '_serial', None)
+        if ser:
+            for _ in range(5):
+                try:
+                    ser.reset_input_buffer()
+                    ser.reset_output_buffer()
+                except Exception:
+                    pass
+                time.sleep(0.1)
+            # Read and discard anything still arriving
+            try:
+                ser.timeout = 0.1
+                while ser.read(4096):
+                    pass
+                ser.timeout = 3
+            except Exception:
+                pass
         time.sleep(0.5)
 
     def _run_demo(self):

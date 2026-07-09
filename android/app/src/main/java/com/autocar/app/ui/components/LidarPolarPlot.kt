@@ -5,9 +5,12 @@ import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
@@ -55,26 +58,31 @@ fun LidarPolarPlot(
 ) {
     val textMeasurer = rememberTextMeasurer()
 
-    // Compute target range OUTSIDE the Canvas (no recomposition loop)
+    // Only update range when we have a meaningful scan (avoid zoom-in on empty frames)
+    var stableRangeM by remember { mutableFloatStateOf(3f) }
     val targetRangeM = remember(points) {
+        if (points.size < 10) return@remember stableRangeM
         var maxDist = 0f
         for (p in points) {
             if (p.dist_mm > maxDist) maxDist = p.dist_mm
         }
-        max(0.5f, (maxDist / 1000f) * 1.1f)
+        val target = max(1f, (maxDist / 1000f) * 1.1f)
+        stableRangeM = target
+        target
     }
 
-    // Animate smoothly toward the target — driven by Compose animation, not draw loop
+    // Animate smoothly toward the target
     val rangeM by animateFloatAsState(
         targetValue = targetRangeM,
-        animationSpec = tween(durationMillis = 300),
+        animationSpec = tween(durationMillis = 500),
         label = "rangeM",
     )
 
     Canvas(
         modifier = modifier
             .fillMaxWidth()
-            .aspectRatio(1f),
+            .aspectRatio(1f)
+            .clipToBounds(),
     ) {
         val w = size.width
         val h = size.height

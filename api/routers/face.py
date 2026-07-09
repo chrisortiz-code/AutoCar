@@ -128,6 +128,8 @@ def _tracker_loop(backend, camera_index, follow_mode):
     target_depth = 0  # mm
     tracking = not follow_mode
     selected_face = None
+    pending_click = None   # (cx, cy) stored while confirming
+    pending_depth = 0      # depth (mm) of face nearest to pending_click
 
     fps_count = 0
     fps_t0 = time.perf_counter()
@@ -168,6 +170,8 @@ def _tracker_loop(backend, camera_index, follow_mode):
                     tracking = False
                     target_depth = 0
                     selected_face = None
+                    pending_click = None
+                    pending_depth = 0
                     if driving:
                         udp_sock.sendto(b"S", udp_dest)
                         driving = False
@@ -179,17 +183,33 @@ def _tracker_loop(backend, camera_index, follow_mode):
             faces = _detector.detect(frame)
             best = max(faces, key=lambda f: f.area) if faces else None
 
-            # Handle clicks (follow mode — tap directly starts following)
+            # Handle clicks (follow mode — select face, wait for confirm)
             if follow_mode and clicks and faces:
                 cx, cy = clicks[-1]
-                selected_face = min(faces, key=lambda f: (f.cx - cx)**2 + (f.cy - cy)**2)
-                d = _face_depth(depth_frame, selected_face)
-                target_depth = d if d > 0 else 0
-                tracking = True
-                selected_face = None
+                pending_click = (cx, cy)
+                nearest = min(faces, key=lambda f: (f.cx - cx)**2 + (f.cy - cy)**2)
+                pending_depth = _face_depth(depth_frame, nearest)
+                tracking = False
+                if driving:
+                    udp_sock.sendto(b"S", udp_dest)
+                    driving = False
                 with _lock:
-                    _state.update(status="following", tracking=True,
-                                  target_depth=target_depth)
+                    _state.update(
+                        status="confirming", tracking=False,
+                        target_depth=pending_depth if pending_depth > 0 else None,
+                        current_depth=pending_depth if pending_depth > 0 else None,
+                    )
+
+            # Handle confirm (follow mode — lock depth and start following)
+            if follow_mode and confirm and pending_click is not None:
+                target_depth = pending_depth if pending_depth > 0 else 0
+                tracking = True
+                pending_click = None
+                with _lock:
+                    _state.update(
+                        status="following", tracking=True,
+                        target_depth=target_depth if target_depth > 0 else None,
+                    )
 
             # Control loop
             rot_speed = 0.0
@@ -239,14 +259,30 @@ def _tracker_loop(backend, camera_index, follow_mode):
             # Draw overlay and encode JPEG for stream
             display = frame.copy()
             fh, fw = display.shape[:2]
+
+            # While confirming, find the face nearest to the pending click
+            confirming_face = None
+            if pending_click is not None and faces:
+                pcx, pcy = pending_click
+                confirming_face = min(faces, key=lambda f: (f.cx - pcx)**2 + (f.cy - pcy)**2)
+                # Update depth live while confirming
+                d = _face_depth(depth_frame, confirming_face)
+                if d > 0:
+                    pending_depth = d
+                    with _lock:
+                        _state["current_depth"] = d
+                        _state["target_depth"] = d
+
             for f in faces:
                 x1 = int((f.cx - f.w / 2) * fw)
                 y1 = int((f.cy - f.h / 2) * fh)
                 x2 = int((f.cx + f.w / 2) * fw)
                 y2 = int((f.cy + f.h / 2) * fh)
                 is_best = (best is not None and f is best and tracking)
-                color = (0, 255, 0) if is_best else (100, 100, 100)
-                cv2.rectangle(display, (x1, y1), (x2, y2), color, 2)
+                is_confirming = (confirming_face is not None and f is confirming_face)
+                color = (0, 255, 0) if (is_best or is_confirming) else (100, 100, 100)
+                thickness = 3 if is_confirming else 2
+                cv2.rectangle(display, (x1, y1), (x2, y2), color, thickness)
                 d = _face_depth(depth_frame, f)
                 if d > 0:
                     label = f"{d / 1000:.2f}m"

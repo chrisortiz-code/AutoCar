@@ -62,6 +62,7 @@ fun FaceViewport(
     val status = faceState.status
     val isIdle = status == "idle"
     val isSelecting = status == "selecting"
+    val isConfirming = status == "confirming"
 
     Column(
         modifier = modifier
@@ -137,7 +138,7 @@ fun FaceViewport(
             // Stream
             TappableMjpegView(
                 url = streamUrl,
-                tappable = isSelecting,
+                tappable = isSelecting || isConfirming,
                 onTap = { x, y -> faceVm.clickFace(x, y) },
                 modifier = Modifier.fillMaxWidth(),
             )
@@ -150,6 +151,40 @@ fun FaceViewport(
                     color = Gold,
                     modifier = Modifier.padding(vertical = 4.dp),
                 )
+            }
+
+            // Confirming: show depth and confirm button
+            if (isConfirming) {
+                val depthText = if (faceState.target_depth != null)
+                    "%.2f m".format(faceState.target_depth!! / 1000f)
+                else "no depth"
+
+                Text(
+                    text = "Locked depth: $depthText",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = StatusGreen,
+                    modifier = Modifier.padding(vertical = 4.dp),
+                )
+
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    OutlinedButton(
+                        onClick = { faceVm.clickFace(0f, 0f) },
+                        modifier = Modifier.weight(1f),
+                    ) {
+                        Text("Re-select")
+                    }
+
+                    Button(
+                        onClick = { faceVm.confirmFace() },
+                        modifier = Modifier.weight(1f),
+                        colors = ButtonDefaults.buttonColors(containerColor = StatusGreen),
+                    ) {
+                        Text("Confirm", fontWeight = FontWeight.Bold, color = Color.Black)
+                    }
+                }
             }
 
             // Stats row
@@ -193,6 +228,7 @@ private fun StatusChip(status: String) {
         "idle" -> Pair(MaterialTheme.colorScheme.onSurfaceVariant, "Idle")
         "tracing" -> Pair(StatusGreen, "Tracing")
         "selecting" -> Pair(StatusYellow, "Selecting")
+        "confirming" -> Pair(Gold, "Confirm?")
         "following" -> Pair(StatusGreen, "Following")
         "lost" -> Pair(StatusRed, "Lost")
         else -> Pair(MaterialTheme.colorScheme.onSurfaceVariant, status)

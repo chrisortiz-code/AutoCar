@@ -120,6 +120,11 @@ class FaceViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
+    /** Called when user navigates away from the Face tab. */
+    fun onTabHidden() {
+        stopPolling()
+    }
+
     override fun onCleared() {
         stopPolling()
         super.onCleared()

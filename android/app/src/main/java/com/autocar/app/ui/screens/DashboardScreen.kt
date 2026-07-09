@@ -1,5 +1,6 @@
 package com.autocar.app.ui.screens
 
+import android.view.InputDevice
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.expandVertically
 import androidx.compose.animation.shrinkVertically
@@ -15,18 +16,23 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Bluetooth
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Error
 import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.KeyboardArrowUp
+import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
@@ -42,11 +48,13 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.autocar.app.data.model.MotorDetail
 import com.autocar.app.ui.theme.Gold
+import com.autocar.app.ui.theme.GoldDark
 import com.autocar.app.ui.theme.GoldLight
 import com.autocar.app.ui.theme.StatusGreen
 import com.autocar.app.ui.theme.StatusRed
@@ -62,9 +70,13 @@ fun DashboardScreen(
 ) {
     val connected by settingsVm.connected.collectAsState()
     val sensorUpdate by sensorsVm.sensorUpdate.collectAsState()
+    var refreshing by remember { mutableStateOf(false) }
 
+    // Detect Bluetooth/USB gamepad
+    var controllerName by remember { mutableStateOf<String?>(null) }
     LaunchedEffect(Unit) {
         while (true) {
+            controllerName = findGamepad()
             settingsVm.checkConnection()
             if (connected) sensorsVm.fetchStatus()
             delay(3000)
@@ -118,6 +130,14 @@ fun DashboardScreen(
             } ?: "Unknown"),
         )
 
+        // Controller card
+        StatusCard(
+            title = "Controller",
+            connected = controllerName != null,
+            detail = controllerName ?: "No controller found",
+            icon = Icons.Default.Bluetooth,
+        )
+
         sensorUpdate.motors?.let { motorsData ->
             Text("Motors", style = MaterialTheme.typography.titleMedium, color = Gold)
             Row(
@@ -138,8 +158,37 @@ fun DashboardScreen(
 
         Spacer(Modifier.height(4.dp))
 
-        Button(onClick = { settingsVm.checkConnection() }, modifier = Modifier.fillMaxWidth()) {
-            Text("Refresh")
+        // Refresh button with feedback
+        Button(
+            onClick = {
+                refreshing = true
+                settingsVm.checkConnection()
+                sensorsVm.fetchStatus()
+            },
+            modifier = Modifier.fillMaxWidth(),
+            enabled = !refreshing,
+        ) {
+            if (refreshing) {
+                CircularProgressIndicator(
+                    modifier = Modifier.size(18.dp),
+                    strokeWidth = 2.dp,
+                    color = MaterialTheme.colorScheme.onPrimary,
+                )
+                Spacer(Modifier.width(8.dp))
+                Text("Refreshing...")
+            } else {
+                Icon(Icons.Default.Refresh, contentDescription = null, modifier = Modifier.size(18.dp))
+                Spacer(Modifier.width(8.dp))
+                Text("Refresh")
+            }
+        }
+
+        // Auto-clear refreshing state
+        if (refreshing) {
+            LaunchedEffect(Unit) {
+                delay(1500)
+                refreshing = false
+            }
         }
 
         HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
@@ -147,6 +196,19 @@ fun DashboardScreen(
         // ── Settings dropdown ──
         SettingsDropdown(settingsVm = settingsVm, connected = connected)
     }
+}
+
+private fun findGamepad(): String? {
+    val ids = InputDevice.getDeviceIds()
+    for (id in ids) {
+        val device = InputDevice.getDevice(id) ?: continue
+        val isGamepad = device.sources and InputDevice.SOURCE_GAMEPAD == InputDevice.SOURCE_GAMEPAD
+        val isJoystick = device.sources and InputDevice.SOURCE_JOYSTICK == InputDevice.SOURCE_JOYSTICK
+        if (isGamepad || isJoystick) {
+            return device.name
+        }
+    }
+    return null
 }
 
 // ── Settings collapsible section ──
@@ -164,6 +226,9 @@ private fun SettingsDropdown(
     var editHost by remember(host) { mutableStateOf(host) }
     var editPort by remember(port) { mutableStateOf(port.toString()) }
     var editToken by remember(token) { mutableStateOf(token) }
+
+    var saving by remember { mutableStateOf(false) }
+    var saveResult by remember { mutableStateOf<Boolean?>(null) }
 
     Column {
         // Header row — tap to toggle
@@ -233,21 +298,62 @@ private fun SettingsDropdown(
 
                 Button(
                     onClick = {
+                        saving = true
+                        saveResult = null
                         settingsVm.setHost(editHost.trim())
                         editPort.trim().toIntOrNull()?.let { settingsVm.setPort(it) }
                         settingsVm.setToken(editToken.trim())
                         settingsVm.checkConnection()
                     },
                     modifier = Modifier.fillMaxWidth(),
+                    enabled = !saving,
+                    colors = ButtonDefaults.buttonColors(containerColor = Gold),
                 ) {
-                    Text("Save & Test Connection")
+                    if (saving) {
+                        CircularProgressIndicator(
+                            modifier = Modifier.size(18.dp),
+                            strokeWidth = 2.dp,
+                            color = GoldDark,
+                        )
+                        Spacer(Modifier.width(8.dp))
+                        Text("Testing...", color = GoldDark)
+                    } else {
+                        Text("Save & Test Connection", color = GoldDark)
+                    }
                 }
 
-                Text(
-                    text = if (connected) "Connected" else "Not connected",
-                    color = if (connected) StatusGreen else StatusRed,
-                    style = MaterialTheme.typography.bodyLarge,
-                )
+                // Show result after save
+                if (saving) {
+                    LaunchedEffect(Unit) {
+                        delay(2000)
+                        saveResult = connected
+                        saving = false
+                    }
+                }
+
+                when (saveResult) {
+                    true -> Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(6.dp),
+                    ) {
+                        Icon(Icons.Default.CheckCircle, null, tint = StatusGreen, modifier = Modifier.size(18.dp))
+                        Text("Connected", color = StatusGreen, style = MaterialTheme.typography.bodyLarge)
+                    }
+                    false -> Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(6.dp),
+                    ) {
+                        Icon(Icons.Default.Error, null, tint = StatusRed, modifier = Modifier.size(18.dp))
+                        Text("Connection failed", color = StatusRed, style = MaterialTheme.typography.bodyLarge)
+                    }
+                    null -> {
+                        Text(
+                            text = if (connected) "Connected" else "Not connected",
+                            color = if (connected) StatusGreen else StatusRed,
+                            style = MaterialTheme.typography.bodyLarge,
+                        )
+                    }
+                }
             }
         }
     }
@@ -256,7 +362,12 @@ private fun SettingsDropdown(
 // ── Shared components ──
 
 @Composable
-private fun StatusCard(title: String, connected: Boolean, detail: String) {
+private fun StatusCard(
+    title: String,
+    connected: Boolean,
+    detail: String,
+    icon: androidx.compose.ui.graphics.vector.ImageVector? = null,
+) {
     Card(modifier = Modifier.fillMaxWidth()) {
         Row(
             modifier = Modifier
@@ -270,7 +381,8 @@ private fun StatusCard(title: String, connected: Boolean, detail: String) {
                 Text(text = detail, style = MaterialTheme.typography.bodyLarge)
             }
             Icon(
-                imageVector = if (connected) Icons.Default.CheckCircle else Icons.Default.Error,
+                imageVector = icon
+                    ?: if (connected) Icons.Default.CheckCircle else Icons.Default.Error,
                 contentDescription = null,
                 tint = if (connected) StatusGreen else StatusRed,
                 modifier = Modifier.size(32.dp),

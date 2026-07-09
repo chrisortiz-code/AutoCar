@@ -22,6 +22,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -49,6 +50,11 @@ fun FaceViewport(
     val faceState by faceVm.faceState.collectAsState()
     val streamUrl by faceVm.streamUrl.collectAsState()
     val error by faceVm.error.collectAsState()
+
+    // Stop polling when leaving this tab
+    DisposableEffect(Unit) {
+        onDispose { faceVm.onTabHidden() }
+    }
 
     var selectedMode by remember { mutableStateOf("trace") }
     var selectedBackend by remember { mutableStateOf("mediapipe") }

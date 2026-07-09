@@ -123,13 +123,8 @@ async def ws_sensors(websocket: WebSocket):
 
             if _lidar:
                 scan = _lidar.get_scan()
-                # Downsample to ~1 point per degree (360 max) to reduce WiFi payload
-                raw_pts = scan["points"]
-                if len(raw_pts) > 400:
-                    step = len(raw_pts) // 360
-                    raw_pts = raw_pts[::step] if step > 1 else raw_pts
                 msg["lidar"] = {
-                    "points": raw_pts,
+                    "points": scan["points"],
                     "scan_hz": scan["scan_hz"],
                     "connected": scan["connected"],
                 }

@@ -1,13 +1,13 @@
 package com.autocar.app.ui.components
 
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
@@ -54,8 +54,22 @@ fun LidarPolarPlot(
     modifier: Modifier = Modifier,
 ) {
     val textMeasurer = rememberTextMeasurer()
-    // Persist rangeM across recompositions for smooth scaling
-    var rangeM by remember { mutableStateOf(1f) }
+
+    // Compute target range OUTSIDE the Canvas (no recomposition loop)
+    val targetRangeM = remember(points) {
+        var maxDist = 0f
+        for (p in points) {
+            if (p.dist_mm > maxDist) maxDist = p.dist_mm
+        }
+        max(0.5f, (maxDist / 1000f) * 1.1f)
+    }
+
+    // Animate smoothly toward the target — driven by Compose animation, not draw loop
+    val rangeM by animateFloatAsState(
+        targetValue = targetRangeM,
+        animationSpec = tween(durationMillis = 300),
+        label = "rangeM",
+    )
 
     Canvas(
         modifier = modifier
@@ -67,17 +81,6 @@ fun LidarPolarPlot(
         val cx = w / 2f
         val cy = h / 2f
         val rMax = min(w, h) * 0.46f
-
-        // Find max distance for auto-scaling
-        var maxDist = 0f
-        for (p in points) {
-            if (p.dist_mm > maxDist) maxDist = p.dist_mm
-        }
-        val dataMaxM = maxDist / 1000f
-        val targetM = max(0.5f, dataMaxM * 1.1f)
-        // Smooth transition like the HTML viewer
-        rangeM = rangeM + (targetM - rangeM) * 0.3f
-        if (rangeM < 0.5f) rangeM = 0.5f
 
         // Background
         drawRect(BgColor, Offset.Zero, Size(w, h))

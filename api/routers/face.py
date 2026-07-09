@@ -12,6 +12,7 @@ import threading
 import time
 
 import cv2
+import numpy as np
 from fastapi import APIRouter, Depends
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
@@ -29,8 +30,8 @@ _state = {
     "tracking": False,
     "rot_speed": 0.0,
     "vx": 0.0,
-    "target_area": None,
-    "selected_area": None,
+    "target_depth": None,
+    "current_depth": None,
     "faces": 0,
     "fps": 0.0,
 }
@@ -55,14 +56,41 @@ def set_camera_reader(camera):
 DEADZONE = 0.10
 MAX_ROT_SPEED = 3.0
 MAX_RANGE_SPEED = 5.0
-AREA_DEADZONE = 0.08
-AREA_GAIN = 0.70
+DEPTH_DEADZONE_MM = 150      # ignore depth errors smaller than this
+DEPTH_GAIN_MM = 1500.0       # depth error (mm) at which speed saturates
+DEPTH_CLUSTER_MM = 400       # max deviation from median to include in average
 CONTROL_HZ = 20
 LOST_TIMEOUT = 1.0
 
 
 def _clamp(value, low, high):
     return max(low, min(high, value))
+
+
+def _face_depth(depth_frame, face):
+    """Average depth (mm) of the body region inside a face bounding box.
+
+    Samples the depth pixels within the bounding box, finds the median,
+    then averages only pixels within DEPTH_CLUSTER_MM of that median.
+    This filters out background pixels and gives a stable body depth.
+    Returns 0 if no valid depth is available.
+    """
+    if depth_frame is None:
+        return 0
+    fh, fw = depth_frame.shape[:2]
+    x1 = max(0, int((face.cx - face.w / 2) * fw))
+    y1 = max(0, int((face.cy - face.h / 2) * fh))
+    x2 = min(fw, int((face.cx + face.w / 2) * fw))
+    y2 = min(fh, int((face.cy + face.h / 2) * fh))
+    roi = depth_frame[y1:y2, x1:x2]
+    valid = roi[roi > 0].astype(np.float32)
+    if len(valid) == 0:
+        return 0
+    med = np.median(valid)
+    cluster = valid[np.abs(valid - med) <= DEPTH_CLUSTER_MM]
+    if len(cluster) == 0:
+        return int(med)
+    return int(np.mean(cluster))
 
 
 # ── Tracker thread ────────────────────────────────────────────────────
@@ -97,7 +125,7 @@ def _tracker_loop(backend, camera_index, follow_mode):
     last_control = 0.0
     last_seen = 0.0
     driving = False
-    target_area = None
+    target_depth = 0  # mm
     tracking = not follow_mode
     selected_face = None
 
@@ -113,12 +141,14 @@ def _tracker_loop(backend, camera_index, follow_mode):
             if use_realsense:
                 frames = _camera_reader.get_frames()
                 frame = frames.get("rgb")
+                depth_frame = frames.get("depth")
                 if frame is None:
                     time.sleep(0.03)
                     continue
                 ok = True
             else:
                 ok, frame = _cap.read()
+                depth_frame = None
             if not ok:
                 break
 
@@ -136,38 +166,30 @@ def _tracker_loop(backend, camera_index, follow_mode):
             if follow_mode:
                 if reset:
                     tracking = False
-                    target_area = None
+                    target_depth = 0
                     selected_face = None
                     if driving:
                         udp_sock.sendto(b"S", udp_dest)
                         driving = False
                     with _lock:
                         _state.update(status="selecting", tracking=False,
-                                      target_area=None, selected_area=None)
-
-                if confirm and selected_face is not None:
-                    target_area = selected_face.area
-                    tracking = True
-                    selected_face = None
-                    with _lock:
-                        _state.update(status="following", tracking=True,
-                                      target_area=target_area)
+                                      target_depth=None, current_depth=None)
 
             # Detect faces
             faces = _detector.detect(frame)
             best = max(faces, key=lambda f: f.area) if faces else None
 
-            # Handle clicks (follow mode face selection)
+            # Handle clicks (follow mode — tap directly starts following)
             if follow_mode and clicks and faces:
                 cx, cy = clicks[-1]
                 selected_face = min(faces, key=lambda f: (f.cx - cx)**2 + (f.cy - cy)**2)
-                tracking = False
-                if driving:
-                    udp_sock.sendto(b"S", udp_dest)
-                    driving = False
+                d = _face_depth(depth_frame, selected_face)
+                target_depth = d if d > 0 else 0
+                tracking = True
+                selected_face = None
                 with _lock:
-                    _state.update(status="selecting", tracking=False,
-                                  selected_area=selected_face.area)
+                    _state.update(status="following", tracking=True,
+                                  target_depth=target_depth)
 
             # Control loop
             rot_speed = 0.0
@@ -182,11 +204,12 @@ def _tracker_loop(backend, camera_index, follow_mode):
                         rot_speed = (1.0 if horiz_error > 0 else -1.0) * _clamp(rot_magnitude, 0.0, 1.0) * MAX_ROT_SPEED
 
                     trans_speed = 0.0
-                    if follow_mode and target_area:
-                        area_error = (target_area - best.area) / target_area
-                        if abs(area_error) >= AREA_DEADZONE:
-                            range_mag = (abs(area_error) - AREA_DEADZONE) / max(0.01, AREA_GAIN)
-                            vx = (1.0 if area_error > 0 else -1.0) * _clamp(range_mag, 0.0, 1.0)
+                    cur_depth = _face_depth(depth_frame, best)
+                    if follow_mode and target_depth > 0 and cur_depth > 0:
+                        depth_error = cur_depth - target_depth  # positive = too far
+                        if abs(depth_error) >= DEPTH_DEADZONE_MM:
+                            range_mag = (abs(depth_error) - DEPTH_DEADZONE_MM) / DEPTH_GAIN_MM
+                            vx = (1.0 if depth_error > 0 else -1.0) * _clamp(range_mag, 0.0, 1.0)
                             trans_speed = abs(vx) * MAX_RANGE_SPEED
 
                     if abs(rot_speed) < 0.01 and abs(vx) < 0.01:
@@ -198,8 +221,9 @@ def _tracker_loop(backend, camera_index, follow_mode):
                         udp_sock.sendto(pkt, udp_dest)
                         driving = True
 
-                    status = "following" if follow_mode and target_area else "tracing"
+                    status = "following" if follow_mode and target_depth > 0 else "tracing"
                 else:
+                    cur_depth = 0
                     if driving and (now - last_seen) >= LOST_TIMEOUT:
                         udp_sock.sendto(b"S", udp_dest)
                         driving = False
@@ -207,7 +231,9 @@ def _tracker_loop(backend, camera_index, follow_mode):
 
                 with _lock:
                     _state.update(status=status, rot_speed=rot_speed, vx=vx,
-                                  faces=len(faces), tracking=tracking)
+                                  faces=len(faces), tracking=tracking,
+                                  target_depth=target_depth if target_depth > 0 else None,
+                                  current_depth=cur_depth if cur_depth > 0 else None)
                 last_control = now
 
             # Draw overlay and encode JPEG for stream
@@ -221,6 +247,11 @@ def _tracker_loop(backend, camera_index, follow_mode):
                 is_best = (best is not None and f is best and tracking)
                 color = (0, 255, 0) if is_best else (100, 100, 100)
                 cv2.rectangle(display, (x1, y1), (x2, y2), color, 2)
+                d = _face_depth(depth_frame, f)
+                if d > 0:
+                    label = f"{d / 1000:.2f}m"
+                    cv2.putText(display, label, (x1, y1 - 6),
+                                cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 1)
 
             _, buf = cv2.imencode(".jpg", display, [cv2.IMWRITE_JPEG_QUALITY, 70])
             with _lock:

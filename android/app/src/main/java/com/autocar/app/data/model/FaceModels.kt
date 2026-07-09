@@ -8,8 +8,8 @@ data class FaceState(
     val tracking: Boolean = false,
     val rot_speed: Float = 0f,
     val vx: Float = 0f,
-    val target_area: Float? = null,
-    val selected_area: Float? = null,
+    val target_depth: Int? = null,
+    val current_depth: Int? = null,
     val faces: Int = 0,
     val fps: Float = 0f,
 )

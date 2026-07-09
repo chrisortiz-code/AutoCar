@@ -22,6 +22,22 @@ except ImportError:
     rs = None  # type: ignore
 
 
+def _fill_depth_holes(depth, iterations=3):
+    """Fill zero (invalid) pixels in a uint16 depth image with nearest valid values.
+
+    Uses iterative dilation: each pass spreads valid pixels into adjacent zeros.
+    """
+    filled = depth.copy()
+    kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5, 5))
+    for _ in range(iterations):
+        mask = (filled == 0).astype(np.uint8)
+        if not mask.any():
+            break
+        dilated = cv2.dilate(filled, kernel, iterations=1)
+        filled = np.where(mask, dilated, filled)
+    return filled
+
+
 def list_realsense_devices():
     """Return list of connected RealSense device serial numbers."""
     if rs is None:
@@ -143,7 +159,8 @@ class CameraReader:
         with self._lock:
             if self._depth is None:
                 return None
-            norm = cv2.normalize(self._depth, None, 0, 255, cv2.NORM_MINMAX).astype(np.uint8)
+            filled = _fill_depth_holes(self._depth)
+            norm = cv2.normalize(filled, None, 0, 255, cv2.NORM_MINMAX).astype(np.uint8)
             colored = cv2.applyColorMap(norm, cv2.COLORMAP_INFERNO)
             _, buf = cv2.imencode('.jpg', colored, [cv2.IMWRITE_JPEG_QUALITY, quality])
             return buf.tobytes()
@@ -200,7 +217,13 @@ class CameraReader:
 
                 rgb = np.asanyarray(color_frame.get_data())
                 depth = np.asanyarray(depth_frame.get_data())
-                depth_colored = np.asanyarray(colorizer.colorize(depth_frame).get_data())
+
+                # Fill invalid (zero) depth pixels with nearest valid neighbors
+                depth_filled = _fill_depth_holes(depth)
+                depth_colored = cv2.applyColorMap(
+                    cv2.normalize(depth_filled, None, 0, 255, cv2.NORM_MINMAX).astype(np.uint8),
+                    cv2.COLORMAP_JET,
+                )
 
                 # Pre-encode JPEGs outside the lock
                 _, rgb_buf = cv2.imencode('.jpg', rgb, [cv2.IMWRITE_JPEG_QUALITY, 70])

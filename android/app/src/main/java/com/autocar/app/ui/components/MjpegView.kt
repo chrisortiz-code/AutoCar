@@ -57,57 +57,50 @@ fun MjpegView(url: String, modifier: Modifier = Modifier) {
                 try {
                     val request = Request.Builder().url(url).build()
                     val response = sharedClient.newCall(request).execute()
-                    if (!response.isSuccessful) {
-                        error = "HTTP ${response.code}"
+                    val body = response.body
+                    if (!response.isSuccessful || body == null) {
+                        error = if (!response.isSuccessful) "HTTP ${response.code}" else "Empty response"
                         response.close()
-                        delay(2000)
-                        continue
-                    }
-                    val stream = BufferedInputStream(
-                        response.body?.byteStream() ?: run {
-                            error = "Empty response"
-                            delay(2000)
-                            continue
-                        }
-                    )
-                    error = null
-                    val buffer = ByteArrayOutputStream()
-                    var inFrame = false
+                    } else {
+                        val stream = BufferedInputStream(body.byteStream())
+                        error = null
+                        val buffer = ByteArrayOutputStream()
+                        var inFrame = false
 
-                    while (isActive) {
-                        val b = stream.read()
-                        if (b == -1) break
+                        while (isActive) {
+                            val b = stream.read()
+                            if (b == -1) break
 
-                        if (!inFrame) {
-                            if (b == 0xFF) {
-                                val next = stream.read()
-                                if (next == -1) break
-                                if (next == 0xD8) {
-                                    buffer.reset()
-                                    buffer.write(0xFF)
-                                    buffer.write(0xD8)
-                                    inFrame = true
-                                }
-                            }
-                        } else {
-                            buffer.write(b)
-                            if (b == 0xD9) {
-                                val bytes = buffer.toByteArray()
-                                val len = bytes.size
-                                if (len >= 2 && bytes[len - 2] == 0xFF.toByte()) {
-                                    val decoded = BitmapFactory.decodeByteArray(bytes, 0, len)
-                                    if (decoded != null) {
-                                        bitmap = decoded
-                                        error = null
+                            if (!inFrame) {
+                                if (b == 0xFF) {
+                                    val next = stream.read()
+                                    if (next == -1) break
+                                    if (next == 0xD8) {
+                                        buffer.reset()
+                                        buffer.write(0xFF)
+                                        buffer.write(0xD8)
+                                        inFrame = true
                                     }
-                                    inFrame = false
+                                }
+                            } else {
+                                buffer.write(b)
+                                if (b == 0xD9) {
+                                    val bytes = buffer.toByteArray()
+                                    val len = bytes.size
+                                    if (len >= 2 && bytes[len - 2] == 0xFF.toByte()) {
+                                        val decoded = BitmapFactory.decodeByteArray(bytes, 0, len)
+                                        if (decoded != null) {
+                                            bitmap = decoded
+                                            error = null
+                                        }
+                                        inFrame = false
+                                    }
                                 }
                             }
                         }
+                        stream.close()
+                        response.close()
                     }
-                    // Stream ended — retry after delay
-                    stream.close()
-                    response.close()
                 } catch (_: kotlinx.coroutines.CancellationException) {
                     break
                 } catch (e: Exception) {

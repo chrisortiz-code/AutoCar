@@ -66,7 +66,11 @@ def sensors_status():
 def lidar_scan():
     if not _lidar:
         return {"points": [], "error": "lidar disabled"}
-    return _lidar.get_scan()
+    scan = _lidar.get_scan()
+    dists = [p["dist_mm"] for p in scan.get("points", []) if p.get("dist_mm", 0) > 0]
+    scan["min_mm"] = min(dists) if dists else None
+    scan["max_mm"] = max(dists) if dists else None
+    return scan
 
 
 # ── Camera MJPEG streams (on stream_router — no auth) ────────────────

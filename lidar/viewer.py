@@ -277,6 +277,8 @@ def main():
                         help=f"Use Jetson UART GPIO pins ({JETSON_UART}) instead of USB")
     parser.add_argument("--motor-pwm", type=int, default=660,
                         help="Motor PWM (lower = slower spin, default 660)")
+    parser.add_argument("--normal", action="store_true",
+                        help="Use normal scan mode (fewer points, lower bandwidth)")
     parser.add_argument("--demo", action="store_true",
                         help="Run without hardware (synthetic scan)")
     parser.add_argument("--web-port", type=int, default=8092,
@@ -307,7 +309,7 @@ def main():
         else:
             parser.error("Specify --port, --gpio, or use --demo. Run with --list-ports to see devices.")
 
-    reader = LidarReader(serial_port or "demo", baudrate=baud, scan_type=scan_type, demo=args.demo, motor_pwm=args.motor_pwm)
+    reader = LidarReader(serial_port or "demo", baudrate=baud, scan_type=scan_type, demo=args.demo, motor_pwm=args.motor_pwm, use_normal_scan=args.normal)
     reader.start()
     server = ScanServer(reader, port=args.web_port)
     print(f"RPLIDAR viewer at http://localhost:{args.web_port}")

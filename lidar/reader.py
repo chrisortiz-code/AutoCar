@@ -99,12 +99,13 @@ def list_serial_ports():
 class LidarReader:
     """Background scan reader for RPLIDAR devices."""
 
-    def __init__(self, port, *, baudrate=1_000_000, scan_type='express', demo=False, motor_pwm=660):
+    def __init__(self, port, *, baudrate=1_000_000, scan_type='express', demo=False, motor_pwm=660, use_normal_scan=False):
         self.port = port
         self.baudrate = baudrate
         self.scan_type = scan_type
         self.demo = demo
         self.motor_pwm = motor_pwm
+        self.use_normal_scan = use_normal_scan
         self._lidar = None
         self._lock = threading.Lock()
         self._stop = threading.Event()
@@ -221,30 +222,33 @@ class LidarReader:
             print(f"RPLIDAR connected on {self.port} @ {self.baudrate}")
             print(f"  info={info}  health={health}")
 
-            # S2 supports: mode 0 = Standard (broken), mode 1 = DenseBoost (correct)
-            # Try DenseBoost first, fall back to typical
-            scan_mode = 1  # DenseBoost
-            try:
-                typical_id = lidar.get_scan_mode_typical()
-                print(f"  device typical mode: {typical_id}, using mode: {scan_mode}")
-            except Exception:
-                print(f"  using mode: {scan_mode}")
-
             lidar.set_motor_pwm(self.motor_pwm)
             print(f"  motor PWM: {self.motor_pwm}")
             time.sleep(1.0)
 
-            resync_count = 0
-            while not self._stop.is_set():
+            if self.use_normal_scan:
+                print("  using NORMAL scan (fewer points, lower bandwidth)")
+                self._run_normal_scan(lidar)
+            else:
+                # S2 supports: mode 0 = Standard (broken), mode 1 = DenseBoost (correct)
+                scan_mode = 1  # DenseBoost
                 try:
-                    self._run_scan_loop(lidar, scan_mode)
-                    resync_count = 0
-                except Exception as e:
-                    resync_count += 1
-                    print(f"  scan restart failed ({e}), attempt {resync_count}...")
-                    self._resync(lidar)
-                    if resync_count >= 10:
-                        raise RuntimeError(f"Too many resync failures: {e}")
+                    typical_id = lidar.get_scan_mode_typical()
+                    print(f"  device typical mode: {typical_id}, using mode: {scan_mode}")
+                except Exception:
+                    print(f"  using mode: {scan_mode}")
+
+                resync_count = 0
+                while not self._stop.is_set():
+                    try:
+                        self._run_scan_loop(lidar, scan_mode)
+                        resync_count = 0
+                    except Exception as e:
+                        resync_count += 1
+                        print(f"  scan restart failed ({e}), attempt {resync_count}...")
+                        self._resync(lidar)
+                        if resync_count >= 10:
+                            raise RuntimeError(f"Too many resync failures: {e}")
         except Exception as exc:
             with self._lock:
                 self._connected = False
@@ -255,6 +259,55 @@ class LidarReader:
             self._disconnect()
             with self._lock:
                 self._connected = False
+
+    def _run_normal_scan(self, lidar):
+        """Normal scan mode — ~400 points/rev, simple 5-byte packets.
+
+        Much lower data rate than express/dense modes, works reliably
+        on bandwidth-limited connections like GPIO UART.
+        """
+        scan_gen = lidar.start_scan()
+
+        NUM_SLOTS = 4500
+        buf = [None] * NUM_SLOTS
+        scan_times = []
+        prev_angle = -1.0
+        update_count = 0
+
+        try:
+            for new_scan, quality, angle, dist in scan_gen():
+                if self._stop.is_set():
+                    break
+
+                now = time.perf_counter()
+
+                if 0 < dist < 30000:
+                    slot = int(angle * NUM_SLOTS / 360.0) % NUM_SLOTS
+                    buf[slot] = (round(angle, 2), int(dist), int(quality), now)
+                    update_count += 1
+
+                # new_scan flag marks the start of a new revolution
+                if new_scan:
+                    if self._last_scan_time:
+                        rev_dt = now - self._last_scan_time
+                        scan_times.append(rev_dt)
+                        if len(scan_times) > 20:
+                            scan_times.pop(0)
+                        self._scan_hz = 1.0 / (sum(scan_times) / len(scan_times))
+                    self._last_scan_time = now
+
+                    # Push snapshot on each revolution
+                    cutoff = now - 0.5
+                    snapshot = [
+                        {"angle": b[0], "dist_mm": b[1], "quality": b[2]}
+                        for b in buf if b is not None and b[3] > cutoff
+                    ]
+                    with self._lock:
+                        self._scan = snapshot
+
+                prev_angle = angle
+        except Exception as e:
+            print(f"  normal scan error: {e}")
 
     def _run_scan_loop(self, lidar, scan_mode):
         """Run one scan session. Returns on corruption to allow restart."""
@@ -388,6 +441,8 @@ def main():
                         help=f"Use Jetson UART GPIO pins ({JETSON_UART}) instead of USB")
     parser.add_argument("--motor-pwm", type=int, default=660,
                         help="Motor PWM (lower = slower spin, default 660)")
+    parser.add_argument("--normal", action="store_true",
+                        help="Use normal scan mode (fewer points, lower bandwidth)")
     parser.add_argument("--demo", action="store_true",
                         help="Run without hardware (synthetic scan)")
     args = parser.parse_args()
@@ -416,7 +471,7 @@ def main():
         else:
             parser.error("Specify --port, --gpio, or use --demo. Run with --list-ports to see devices.")
 
-    reader = LidarReader(port or "demo", baudrate=baud, scan_type=scan_type, demo=args.demo, motor_pwm=args.motor_pwm)
+    reader = LidarReader(port or "demo", baudrate=baud, scan_type=scan_type, demo=args.demo, motor_pwm=args.motor_pwm, use_normal_scan=args.normal)
     reader.start()
     print("Streaming scans (Ctrl+C to stop)...")
     try:

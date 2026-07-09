@@ -7,6 +7,7 @@ Recommended for Jetson Orin Nano: buffalo_sc (uses SCRFD-500M).
 """
 
 from .base import FaceDetector, Detection
+from models import MODELS_DIR
 
 DEFAULT_MODEL_PACK = "buffalo_sc"
 
@@ -20,6 +21,7 @@ class SCRFDFaceDetector(FaceDetector):
 
         self._app = insightface.app.FaceAnalysis(
             name=model_name,
+            root=MODELS_DIR,
             allowed_modules=["detection"],
         )
         self._app.prepare(ctx_id=ctx_id, det_size=det_size)

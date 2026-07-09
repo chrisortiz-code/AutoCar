@@ -7,13 +7,29 @@ Tiny model (~220KB), very fast on CPU and GPU, zero extra pip deps.
 """
 
 import os
+import urllib.request
 
 import cv2
 import numpy as np
 
 from .base import FaceDetector, Detection
+from models import MODELS_DIR
 
 DEFAULT_MODEL = "face_detection_yunet_2023mar.onnx"
+MODEL_URL = ("https://github.com/opencv/opencv_zoo/raw/main/models/"
+             "face_detection_yunet/face_detection_yunet_2023mar.onnx")
+
+
+def _ensure_model(model_path):
+    if os.path.exists(model_path):
+        return model_path
+    dest = os.path.join(MODELS_DIR, os.path.basename(model_path))
+    if os.path.exists(dest):
+        return dest
+    print(f"[yunet] Downloading {os.path.basename(model_path)} to models/ ...")
+    urllib.request.urlretrieve(MODEL_URL, dest)
+    print(f"[yunet] Saved to {dest}")
+    return dest
 
 
 class YuNetFaceDetector(FaceDetector):
@@ -21,12 +37,7 @@ class YuNetFaceDetector(FaceDetector):
 
     def __init__(self, model_path=DEFAULT_MODEL, score_threshold=0.5,
                  backend_id=None, target_id=None):
-        if not os.path.exists(model_path):
-            raise FileNotFoundError(
-                f"YuNet model not found at {model_path!r}. Download it:\n"
-                "  wget https://github.com/opencv/opencv_zoo/raw/main/models/"
-                "face_detection_yunet/face_detection_yunet_2023mar.onnx"
-            )
+        model_path = _ensure_model(model_path)
         # Try backends in order: caller-specified, then CUDA, then CPU
         attempts = []
         if backend_id is not None and target_id is not None:

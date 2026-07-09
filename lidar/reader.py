@@ -4,7 +4,11 @@ RPLIDAR reader — S2 defaults (1 Mbps serial over USB adapter).
 Usage:
     python -m lidar.reader --list-ports
     python -m lidar.reader --port COM3
+    python -m lidar.reader --gpio          # Use Jetson UART pins instead of USB
 """
+
+# Jetson hardware UART for GPIO pin connection (TX/RX on 40-pin header)
+JETSON_UART = "/dev/ttyTHS1"
 
 import argparse
 import math
@@ -314,6 +318,8 @@ def main():
                         help="Override serial baud rate")
     parser.add_argument("--list-ports", action="store_true",
                         help="List available serial ports and exit")
+    parser.add_argument("--gpio", action="store_true",
+                        help=f"Use Jetson UART GPIO pins ({JETSON_UART}) instead of USB")
     parser.add_argument("--demo", action="store_true",
                         help="Run without hardware (synthetic scan)")
     args = parser.parse_args()
@@ -331,13 +337,16 @@ def main():
     baud = args.baudrate or MODEL_BAUD[args.model]
     scan_type = MODEL_SCAN_TYPE[args.model]
     port = args.port
-    if not args.demo and not port:
+    if args.gpio:
+        port = port or JETSON_UART
+        print(f"GPIO mode: using UART {port}")
+    elif not args.demo and not port:
         ports = list_serial_ports()
         if len(ports) == 1:
             port = ports[0]
             print(f"Auto-selected port: {port}")
         else:
-            parser.error("Specify --port or use --demo. Run with --list-ports to see devices.")
+            parser.error("Specify --port, --gpio, or use --demo. Run with --list-ports to see devices.")
 
     reader = LidarReader(port or "demo", baudrate=baud, scan_type=scan_type, demo=args.demo)
     reader.start()

@@ -28,11 +28,15 @@ import androidx.compose.material.icons.filled.Error
 import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.KeyboardArrowUp
 import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material.icons.filled.GridView
 import androidx.compose.material.icons.filled.Settings
+import androidx.compose.material.icons.filled.ViewSidebar
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.FilterChip
+import androidx.compose.material3.FilterChipDefaults
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
@@ -219,6 +223,7 @@ private fun SettingsDropdown(
     connected: Boolean,
 ) {
     var expanded by remember { mutableStateOf(false) }
+    val layoutMode by settingsVm.layoutMode.collectAsState()
     val host by settingsVm.host.collectAsState()
     val port by settingsVm.port.collectAsState()
     val token by settingsVm.token.collectAsState()
@@ -270,6 +275,41 @@ private fun SettingsDropdown(
                 verticalArrangement = Arrangement.spacedBy(12.dp),
                 modifier = Modifier.padding(top = 4.dp),
             ) {
+                // Layout mode toggle
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text("Layout", style = MaterialTheme.typography.bodyLarge)
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        FilterChip(
+                            selected = layoutMode == "grid",
+                            onClick = { settingsVm.setLayoutMode("grid") },
+                            label = { Text("Grid") },
+                            leadingIcon = { Icon(Icons.Default.GridView, null, modifier = Modifier.size(16.dp)) },
+                            colors = FilterChipDefaults.filterChipColors(
+                                selectedContainerColor = GoldDark.copy(alpha = 0.3f),
+                                selectedLabelColor = Gold,
+                                selectedLeadingIconColor = Gold,
+                            ),
+                        )
+                        FilterChip(
+                            selected = layoutMode == "classic",
+                            onClick = { settingsVm.setLayoutMode("classic") },
+                            label = { Text("Classic") },
+                            leadingIcon = { Icon(Icons.Default.ViewSidebar, null, modifier = Modifier.size(16.dp)) },
+                            colors = FilterChipDefaults.filterChipColors(
+                                selectedContainerColor = GoldDark.copy(alpha = 0.3f),
+                                selectedLabelColor = Gold,
+                                selectedLeadingIconColor = Gold,
+                            ),
+                        )
+                    }
+                }
+
+                HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+
                 OutlinedTextField(
                     value = editHost,
                     onValueChange = { editHost = it },

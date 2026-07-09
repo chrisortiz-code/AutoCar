@@ -17,7 +17,7 @@ import time
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from socketserver import ThreadingMixIn
 
-from .reader import LidarReader, MODEL_BAUD, MODEL_SCAN_TYPE, list_serial_ports
+from .reader import JETSON_UART, LidarReader, MODEL_BAUD, MODEL_SCAN_TYPE, list_serial_ports
 
 PAGE_HTML = """<!DOCTYPE html>
 <html lang="en">
@@ -272,6 +272,8 @@ def main():
                         help="Override serial baud rate")
     parser.add_argument("--list-ports", action="store_true",
                         help="List available serial ports and exit")
+    parser.add_argument("--gpio", action="store_true",
+                        help=f"Use Jetson UART GPIO pins ({JETSON_UART}) instead of USB")
     parser.add_argument("--demo", action="store_true",
                         help="Run without hardware (synthetic scan)")
     parser.add_argument("--web-port", type=int, default=8092,
@@ -291,13 +293,16 @@ def main():
     baud = args.baudrate or MODEL_BAUD[args.model]
     scan_type = MODEL_SCAN_TYPE[args.model]
     serial_port = args.serial_port
-    if not args.demo and not serial_port:
+    if args.gpio:
+        serial_port = serial_port or JETSON_UART
+        print(f"GPIO mode: using UART {serial_port}")
+    elif not args.demo and not serial_port:
         ports = list_serial_ports()
         if len(ports) == 1:
             serial_port = ports[0]
             print(f"Auto-selected port: {serial_port}")
         else:
-            parser.error("Specify --port or use --demo. Run with --list-ports to see devices.")
+            parser.error("Specify --port, --gpio, or use --demo. Run with --list-ports to see devices.")
 
     reader = LidarReader(serial_port or "demo", baudrate=baud, scan_type=scan_type, demo=args.demo)
     reader.start()

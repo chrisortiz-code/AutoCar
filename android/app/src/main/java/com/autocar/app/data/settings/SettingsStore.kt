@@ -18,14 +18,17 @@ class SettingsStore(private val context: Context) {
         private val HOST = stringPreferencesKey("host")
         private val PORT = intPreferencesKey("port")
         private val TOKEN = stringPreferencesKey("token")
+        private val LAYOUT_MODE = stringPreferencesKey("layout_mode")
 
         const val DEFAULT_HOST = "192.168.2.83"
         const val DEFAULT_PORT = 8080
+        const val DEFAULT_LAYOUT_MODE = "grid"
     }
 
     val host: Flow<String> = context.dataStore.data.map { it[HOST] ?: DEFAULT_HOST }
     val port: Flow<Int> = context.dataStore.data.map { it[PORT] ?: DEFAULT_PORT }
     val token: Flow<String> = context.dataStore.data.map { it[TOKEN] ?: "" }
+    val layoutMode: Flow<String> = context.dataStore.data.map { it[LAYOUT_MODE] ?: DEFAULT_LAYOUT_MODE }
 
     val baseUrl: Flow<String> = context.dataStore.data.map { prefs ->
         val h = prefs[HOST] ?: DEFAULT_HOST
@@ -43,5 +46,9 @@ class SettingsStore(private val context: Context) {
 
     suspend fun setToken(value: String) {
         context.dataStore.edit { it[TOKEN] = value }
+    }
+
+    suspend fun setLayoutMode(value: String) {
+        context.dataStore.edit { it[LAYOUT_MODE] = value }
     }
 }

@@ -1,5 +1,6 @@
 package com.autocar.app.ui.screens
 
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.layout.Arrangement
@@ -30,11 +31,14 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.unit.dp
@@ -42,6 +46,8 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import com.autocar.app.data.gamepad.GamepadManager
 import com.autocar.app.ui.components.GamepadOverlay
 import com.autocar.app.ui.theme.Gold
+import com.autocar.app.ui.theme.GoldDark
+import com.autocar.app.ui.theme.GoldLight
 import com.autocar.app.ui.theme.StatusGreen
 import com.autocar.app.ui.theme.StatusRed
 import com.autocar.app.ui.theme.StatusYellow
@@ -60,6 +66,8 @@ fun DriveScreen(
 
     var touchVx by remember { mutableFloatStateOf(0f) }
     var touchVy by remember { mutableFloatStateOf(0f) }
+    var trail by remember { mutableStateOf(listOf<Offset>()) }
+    var dragging by remember { mutableStateOf(false) }
 
     LaunchedEffect(Unit) {
         driveVm.connectWebSocket()
@@ -139,33 +147,81 @@ fun DriveScreen(
             modifier = Modifier
                 .fillMaxWidth()
                 .height(200.dp)
+                .clip(MaterialTheme.shapes.medium)
                 .pointerInput(Unit) {
                     detectDragGestures(
+                        onDragStart = { offset ->
+                            dragging = true
+                            trail = listOf(offset)
+                        },
                         onDragEnd = {
                             touchVx = 0f
                             touchVy = 0f
+                            dragging = false
+                            trail = emptyList()
                             driveVm.sendStop()
                         },
                         onDragCancel = {
                             touchVx = 0f
                             touchVy = 0f
+                            dragging = false
+                            trail = emptyList()
                             driveVm.sendStop()
                         },
-                    ) { _, dragAmount ->
+                    ) { change, dragAmount ->
                         touchVx = (-dragAmount.y / 200f).coerceIn(-1f, 1f)
                         touchVy = (dragAmount.x / 200f).coerceIn(-1f, 1f)
                         driveVm.sendDrive(touchVx, touchVy, 3f, 0f)
+                        // Append position, keep last 20 points for the trail
+                        trail = (trail + change.position).takeLast(20)
                     }
                 },
             contentAlignment = Alignment.Center,
         ) {
             Surface(
-                modifier = Modifier.fillMaxWidth().height(200.dp),
+                modifier = Modifier.fillMaxSize(),
                 color = MaterialTheme.colorScheme.surfaceVariant,
                 shape = MaterialTheme.shapes.medium,
             ) {
                 Box(contentAlignment = Alignment.Center) {
-                    Text("Drag to drive")
+                    if (!dragging) {
+                        Text("Drag to drive")
+                    }
+                }
+            }
+            // Gold meteor trail overlay
+            if (trail.size >= 2) {
+                Canvas(modifier = Modifier.fillMaxSize()) {
+                    val points = trail
+                    for (i in points.indices) {
+                        val t = (i + 1).toFloat() / points.size  // 0→1 (tail→head)
+                        val radius = 3.dp.toPx() + t * 9.dp.toPx()
+                        val alpha = t * t  // quadratic fade — head is bright
+                        // Glow halo
+                        drawCircle(
+                            brush = Brush.radialGradient(
+                                colors = listOf(
+                                    Gold.copy(alpha = alpha * 0.5f),
+                                    Color.Transparent,
+                                ),
+                                center = points[i],
+                                radius = radius * 2.5f,
+                            ),
+                            radius = radius * 2.5f,
+                            center = points[i],
+                        )
+                        // Core
+                        drawCircle(
+                            color = GoldLight.copy(alpha = alpha),
+                            radius = radius * 0.5f,
+                            center = points[i],
+                        )
+                        drawCircle(
+                            color = Gold.copy(alpha = alpha),
+                            radius = radius,
+                            center = points[i],
+                        )
+                    }
                 }
             }
         }

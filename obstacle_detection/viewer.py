@@ -15,6 +15,7 @@ import argparse
 import json
 import os
 import platform
+import sys
 import threading
 import time
 from http.server import HTTPServer, BaseHTTPRequestHandler
@@ -22,6 +23,10 @@ from socketserver import ThreadingMixIn
 
 import cv2
 import numpy as np
+
+# Add project root to path for models import
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
+from models import MODELS_DIR
 # ---------------------------------------------------------------------------
 # Deterministic colour palette — same class always gets the same colour
 # ---------------------------------------------------------------------------
@@ -250,10 +255,19 @@ def main():
     # --- Resolve model path ---
     from ultralytics import YOLO
 
+    def _find_model(name):
+        """Check cwd first, then models/ directory."""
+        if os.path.exists(name):
+            return name
+        in_models = os.path.join(MODELS_DIR, name)
+        if os.path.exists(in_models):
+            return in_models
+        return name  # let ultralytics auto-download to models/
+
     if args.world:
         # YOLO-World: open-vocabulary detection with custom classes
         classes = [c.strip() for c in args.world.split(",") if c.strip()]
-        model_path = args.model or "yolov8s-world.pt"
+        model_path = _find_model(args.model or "yolov8s-world.pt")
         print(f"YOLO-World mode: {classes}")
         print(f"Model: {model_path}")
         model = YOLO(model_path)
@@ -261,12 +275,15 @@ def main():
     else:
         model_path = args.model
         if model_path is None:
-            if os.path.exists("yolo11s.engine"):
-                model_path = "yolo11s.engine"
+            engine = _find_model("yolo11s.engine")
+            if os.path.exists(engine):
+                model_path = engine
                 print("Using TensorRT engine")
             else:
-                model_path = "yolo11s.pt"
+                model_path = _find_model("yolo11s.pt")
                 print("Using PyTorch weights")
+        else:
+            model_path = _find_model(model_path)
         print(f"Model: {model_path}")
         model = YOLO(model_path, task="detect")
 

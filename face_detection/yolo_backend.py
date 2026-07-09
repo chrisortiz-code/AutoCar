@@ -11,19 +11,19 @@ import os
 import urllib.request
 
 from .base import FaceDetector, Detection
+from models import MODELS_DIR
 
 DEFAULT_MODEL = "yolov8n-face.pt"
 MODEL_URL = "https://github.com/akanametov/yolo-face/releases/download/v0.0.0/yolov8n-face.pt"
-MODEL_DIR = os.path.dirname(os.path.abspath(__file__))
 
 
 def _ensure_model(model_path):
     if os.path.exists(model_path):
         return model_path
-    dest = os.path.join(MODEL_DIR, os.path.basename(model_path))
+    dest = os.path.join(MODELS_DIR, os.path.basename(model_path))
     if os.path.exists(dest):
         return dest
-    print(f"[yolo] Downloading {os.path.basename(model_path)} ...")
+    print(f"[yolo] Downloading {os.path.basename(model_path)} to models/ ...")
     urllib.request.urlretrieve(MODEL_URL, dest)
     print(f"[yolo] Saved to {dest}")
     return dest

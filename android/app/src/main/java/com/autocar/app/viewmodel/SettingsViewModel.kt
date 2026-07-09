@@ -29,12 +29,16 @@ class SettingsViewModel(app: Application) : AndroidViewModel(app) {
     val baseUrl: StateFlow<String> = store.baseUrl
         .stateIn(viewModelScope, SharingStarted.Eagerly, "http://${SettingsStore.DEFAULT_HOST}:${SettingsStore.DEFAULT_PORT}/")
 
+    val layoutMode: StateFlow<String> = store.layoutMode
+        .stateIn(viewModelScope, SharingStarted.Eagerly, SettingsStore.DEFAULT_LAYOUT_MODE)
+
     private val _connected = MutableStateFlow(false)
     val connected: StateFlow<Boolean> = _connected.asStateFlow()
 
     fun setHost(value: String) = viewModelScope.launch { store.setHost(value) }
     fun setPort(value: Int) = viewModelScope.launch { store.setPort(value) }
     fun setToken(value: String) = viewModelScope.launch { store.setToken(value) }
+    fun setLayoutMode(value: String) = viewModelScope.launch { store.setLayoutMode(value) }
 
     fun checkConnection() = viewModelScope.launch {
         try {

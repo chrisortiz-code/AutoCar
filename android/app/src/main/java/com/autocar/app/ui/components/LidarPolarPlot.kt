@@ -3,7 +3,6 @@ package com.autocar.app.ui.components
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Canvas
-import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.runtime.Composable
@@ -80,8 +79,6 @@ fun LidarPolarPlot(
 
     Canvas(
         modifier = modifier
-            .fillMaxWidth()
-            .aspectRatio(1f)
             .clipToBounds(),
     ) {
         val w = size.width

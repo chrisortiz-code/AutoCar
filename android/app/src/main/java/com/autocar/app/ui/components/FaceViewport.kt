@@ -145,7 +145,7 @@ fun FaceViewport(
             // Selecting prompt
             if (isSelecting) {
                 Text(
-                    text = "Tap a face to select, then confirm",
+                    text = "Tap a face to follow",
                     style = MaterialTheme.typography.bodyMedium,
                     color = Gold,
                     modifier = Modifier.padding(vertical = 4.dp),
@@ -168,16 +168,6 @@ fun FaceViewport(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
             ) {
-                if (isSelecting) {
-                    Button(
-                        onClick = { faceVm.confirmFace() },
-                        modifier = Modifier.weight(1f),
-                        colors = ButtonDefaults.buttonColors(containerColor = Gold),
-                    ) {
-                        Text("Confirm", fontWeight = FontWeight.Bold, color = Color.Black)
-                    }
-                }
-
                 OutlinedButton(
                     onClick = { faceVm.reset() },
                     modifier = Modifier.weight(1f),

@@ -42,6 +42,7 @@ from api.routers.drive import router as drive_router
 from api.routers.paths import router as paths_router
 from api.routers.sensors import router as sensors_router, stream_router as sensors_stream_router
 from api.routers.face import router as face_router, stream_router as face_stream_router
+from api.routers.object_track import router as track_router, stream_router as track_stream_router
 
 app.include_router(drive_router)
 app.include_router(paths_router)
@@ -49,6 +50,8 @@ app.include_router(sensors_router)
 app.include_router(sensors_stream_router)
 app.include_router(face_router)
 app.include_router(face_stream_router)
+app.include_router(track_router)
+app.include_router(track_stream_router)
 
 
 @app.get("/")
@@ -62,6 +65,7 @@ def root():
             "paths": "/api/paths",
             "sensors": "/api/sensors",
             "face": "/api/face",
+            "track": "/api/track",
             "websocket": "/api/ws/sensors",
         },
     }
@@ -116,10 +120,12 @@ def configure(*, demo=False, no_camera=False, no_lidar=False):
     set_readers(camera=camera, lidar=lidar)
     start_udp_relay()
 
-    # Share camera with face tracker so it uses RealSense instead of V4L2
+    # Share camera with face tracker and object tracker
     if camera:
         from api.routers.face import set_camera_reader
         set_camera_reader(camera)
+        from api.routers.object_track import set_camera_reader as set_track_camera
+        set_track_camera(camera)
 
     # Store refs for cleanup
     app.state.camera = camera

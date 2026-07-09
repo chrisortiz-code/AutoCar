@@ -15,6 +15,7 @@ import androidx.compose.material.icons.filled.Dashboard
 import androidx.compose.material.icons.filled.Face
 import androidx.compose.material.icons.filled.Gamepad
 import androidx.compose.material.icons.filled.Route
+import androidx.compose.material.icons.filled.CenterFocusStrong
 import androidx.compose.material.icons.filled.Sensors
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
@@ -40,6 +41,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.autocar.app.data.gamepad.GamepadManager
 import com.autocar.app.ui.components.FaceViewport
+import com.autocar.app.ui.components.ObjectTrackViewport
 import com.autocar.app.ui.components.SensorViewport
 import com.autocar.app.ui.components.SidePanel
 import com.autocar.app.ui.screens.DashboardScreen
@@ -53,6 +55,7 @@ import com.autocar.app.ui.theme.SurfaceDark
 enum class NavTab(val label: String, val icon: ImageVector) {
     Sensors("Sensors", Icons.Default.Sensors),
     Face("Face", Icons.Default.Face),
+    Track("Track", Icons.Default.CenterFocusStrong),
     Dashboard("Dashboard", Icons.Default.Dashboard),
     Drive("Drive", Icons.Default.Gamepad),
     Paths("Paths", Icons.Default.Route),
@@ -62,6 +65,7 @@ enum class NavTab(val label: String, val icon: ImageVector) {
 private enum class Viewport(val label: String, val icon: ImageVector) {
     Sensors("Sensors", Icons.Default.Sensors),
     Face("Face", Icons.Default.Face),
+    Track("Track", Icons.Default.CenterFocusStrong),
 }
 
 /** Tabs shown in the right rail (tablet landscape) — side-panel content. */
@@ -143,6 +147,7 @@ private fun ColumnScope.TabletLandscapeLayout(gamepadManager: GamepadManager) {
             when (viewport) {
                 Viewport.Sensors -> SensorViewport()
                 Viewport.Face -> FaceViewport()
+                Viewport.Track -> ObjectTrackViewport()
             }
         }
 
@@ -195,6 +200,7 @@ private fun ColumnScope.PhoneLayout(gamepadManager: GamepadManager) {
         when (selectedTab) {
             NavTab.Sensors -> SensorViewport()
             NavTab.Face -> FaceViewport()
+            NavTab.Track -> ObjectTrackViewport()
             NavTab.Dashboard -> DashboardScreen()
             NavTab.Drive -> DriveScreen(gamepadManager = gamepadManager)
             NavTab.Paths -> PathsScreen()

@@ -25,7 +25,11 @@
       "WebSearch",
       "Bash(powershell.exe:*)",
       "WebFetch(domain:github.com)",
-      "Bash(git:*)"
+      "Bash(git:*)",
+      "Bash(curl:*)",
+      "Bash(echo ===:*)",
+      "Bash(./gradlew assembleDebug:*)",
+      "Bash(ls:*)"
     ]
   }
 }

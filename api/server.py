@@ -95,20 +95,20 @@ def configure(*, demo=False, no_camera=False, no_lidar=False):
 
     if not no_lidar:
         try:
-            from lidar.process import LidarProcess
+            from lidar.proxy import LidarProxy
             from lidar.reader import list_serial_ports
             if demo:
-                lidar = LidarProcess("demo", demo=True)
+                lidar = LidarProxy("demo", demo=True)
             else:
                 ports = list_serial_ports()
                 port = ports[0] if len(ports) == 1 else None
                 if port:
-                    lidar = LidarProcess(port)
+                    lidar = LidarProxy(port)
                 else:
                     print(f"Lidar: no port found (available: {ports})")
             if lidar:
                 lidar.start()
-                print(f"Lidar: {'demo mode' if demo else lidar.port} (separate process)")
+                print(f"Lidar: {'demo mode' if demo else lidar.port} (standalone viewer on :8092)")
         except Exception as e:
             print(f"Lidar init failed: {e}")
 

@@ -33,7 +33,7 @@ def list_realsense_devices():
 class CameraReader:
     """Background capture for Intel RealSense D435 RGB + depth."""
 
-    def __init__(self, *, serial=None, width=640, height=480, fps=15, demo=False):
+    def __init__(self, *, serial=None, width=480, height=480, fps=15, demo=False):
         self.serial = serial
         self.width = width
         self.height = height

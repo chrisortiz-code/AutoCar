@@ -234,18 +234,36 @@ class LidarReader:
             print(f"  motor PWM: {self.motor_pwm}")
             time.sleep(1.0)
 
-            scan_gen = lidar.start_scan_express(scan_mode)
+            while not self._stop.is_set():
+                self._run_scan_loop(lidar, scan_mode)
+        except Exception as exc:
+            with self._lock:
+                self._connected = False
+                self._error = str(exc)
+            print(f"RPLIDAR error: {exc}", file=sys.stderr)
+            import traceback; traceback.print_exc()
+        finally:
+            self._disconnect()
+            with self._lock:
+                self._connected = False
 
-            # Persistent buffer — one slot per ~0.08° (4500 slots for 360°).
-            NUM_SLOTS = 4500
-            buf = [None] * NUM_SLOTS
-            scan_times = []
-            prev_angle = -1.0
-            update_count = 0
+    def _run_scan_loop(self, lidar, scan_mode):
+        """Run one scan session. Returns on corruption to allow restart."""
+        scan_gen = lidar.start_scan_express(scan_mode)
 
+        NUM_SLOTS = 4500
+        buf = [None] * NUM_SLOTS
+        scan_times = []
+        prev_angle = -1.0
+        update_count = 0
+        # Corruption detection
+        false_revs = 0  # consecutive impossibly fast revolutions
+        last_rev_time = 0.0
+
+        try:
             for measurement in scan_gen():
                 if self._stop.is_set():
-                    break
+                    return
 
                 angle = measurement.angle
                 dist = measurement.distance
@@ -260,19 +278,31 @@ class LidarReader:
 
                 # Detect full revolution to update Hz counter
                 if prev_angle > 300 and angle < 60:
-                    if self._last_scan_time:
-                        scan_times.append(now - self._last_scan_time)
-                        if len(scan_times) > 20:
-                            scan_times.pop(0)
-                        self._scan_hz = 1.0 / (sum(scan_times) / len(scan_times))
-                    self._last_scan_time = now
+                    if last_rev_time > 0:
+                        rev_dt = now - last_rev_time
+                        rev_hz = 1.0 / rev_dt if rev_dt > 0 else 999
+
+                        # S2 max spin is ~15Hz. Anything above 30Hz is corrupt data.
+                        if rev_hz > 30:
+                            false_revs += 1
+                            if false_revs >= 3:
+                                print(f"  corrupt data detected ({rev_hz:.0f}Hz), re-syncing...")
+                                self._resync(lidar)
+                                return  # restart scan loop
+                        else:
+                            false_revs = 0
+                            scan_times.append(rev_dt)
+                            if len(scan_times) > 20:
+                                scan_times.pop(0)
+                            self._scan_hz = 1.0 / (sum(scan_times) / len(scan_times))
+
+                    last_rev_time = now
 
                 prev_angle = angle
 
                 # Push snapshot to viewer every ~360 points
                 if update_count >= 360:
                     update_count = 0
-                    # Only include points from the last 0.5s (a few revolutions)
                     cutoff = now - 0.5
                     snapshot = [
                         {"angle": b[0], "dist_mm": b[1], "quality": b[2]}
@@ -280,16 +310,22 @@ class LidarReader:
                     ]
                     with self._lock:
                         self._scan = snapshot
-        except Exception as exc:
-            with self._lock:
-                self._connected = False
-                self._error = str(exc)
-            print(f"RPLIDAR error: {exc}", file=sys.stderr)
-            import traceback; traceback.print_exc()
-        finally:
-            self._disconnect()
-            with self._lock:
-                self._connected = False
+        except Exception as e:
+            print(f"  scan error: {e}, re-syncing...")
+            self._resync(lidar)
+
+    def _resync(self, lidar):
+        """Stop scan, flush serial buffer, and pause before restarting."""
+        try:
+            lidar.stop()
+        except Exception:
+            pass
+        try:
+            if hasattr(lidar, '_serial') and lidar._serial:
+                lidar._serial.reset_input_buffer()
+        except Exception:
+            pass
+        time.sleep(0.5)
 
     def _run_demo(self):
         """Synthetic scan for GUI testing without hardware."""

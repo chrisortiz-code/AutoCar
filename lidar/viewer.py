@@ -314,15 +314,36 @@ def main():
         print(f"Serial: {serial_port} @ {baud} baud")
     print("Ctrl+C to stop.")
 
+    # Ensure cleanup runs even on SIGTERM / double Ctrl+C
+    import atexit
+    import signal
+
+    cleaned = False
+
+    def _cleanup():
+        nonlocal cleaned
+        if cleaned:
+            return
+        cleaned = True
+        print("\nCleaning up...")
+        reader.stop()
+        server.stop()
+        print("Done.")
+
+    atexit.register(_cleanup)
+
+    def _sig_handler(signum, frame):
+        _cleanup()
+        sys.exit(0)
+
+    signal.signal(signal.SIGTERM, _sig_handler)
+    signal.signal(signal.SIGINT, _sig_handler)
+
     try:
         while True:
             time.sleep(0.5)
     except KeyboardInterrupt:
-        print("\nStopping...")
-    finally:
-        reader.stop()
-        server.stop()
-        print("Done.")
+        _cleanup()
 
 
 if __name__ == "__main__":

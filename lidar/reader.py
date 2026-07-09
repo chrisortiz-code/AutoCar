@@ -174,6 +174,12 @@ class LidarReader:
             lidar.disconnect()
         except Exception:
             pass
+        # Force-close the underlying serial port if pyrplidar didn't
+        try:
+            if hasattr(lidar, '_serial') and lidar._serial and lidar._serial.is_open:
+                lidar._serial.close()
+        except Exception:
+            pass
 
     def _run(self):
         if self.demo:

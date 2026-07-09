@@ -275,9 +275,14 @@ class LidarReader:
         update_count = 0
 
         try:
-            for new_scan, quality, angle, dist in scan_gen():
+            for measurement in scan_gen():
                 if self._stop.is_set():
                     break
+
+                angle = measurement.angle
+                dist = measurement.distance
+                quality = measurement.quality
+                new_scan = measurement.start_flag
 
                 now = time.perf_counter()
 

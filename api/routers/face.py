@@ -20,6 +20,7 @@ from api.auth import require_auth
 from api.udp import UDP_HOST, UDP_PORT
 
 router = APIRouter(prefix="/api/face", tags=["face"], dependencies=[Depends(require_auth)])
+stream_router = APIRouter(prefix="/api/face", tags=["face"])  # no auth for MJPEG stream
 
 # ── State ─────────────────────────────────────────────────────────────
 _lock = threading.Lock()
@@ -41,6 +42,13 @@ _reset_flag = False
 _latest_jpeg = None
 _detector = None
 _cap = None
+_camera_reader = None  # set by set_camera_reader()
+
+
+def set_camera_reader(camera):
+    """Inject the shared CameraReader so face detection uses it instead of V4L2."""
+    global _camera_reader
+    _camera_reader = camera
 
 
 # ── Configuration ─────────────────────────────────────────────────────
@@ -67,17 +75,21 @@ def _tracker_loop(backend, camera_index, follow_mode):
     from face_detection import create_detector
 
     _detector = create_detector(backend)
-    import platform
-    if platform.system() == "Linux":
-        _cap = cv2.VideoCapture(camera_index, cv2.CAP_V4L2)
-    else:
-        _cap = cv2.VideoCapture(camera_index)
 
-    if not _cap.isOpened():
-        with _lock:
-            _state["status"] = "idle"
-            _state["tracking"] = False
-        return
+    # Use the shared CameraReader (RealSense) if available, otherwise fall back to V4L2
+    use_realsense = _camera_reader is not None and _camera_reader.connected
+    if not use_realsense:
+        import platform
+        if platform.system() == "Linux":
+            _cap = cv2.VideoCapture(camera_index, cv2.CAP_V4L2)
+        else:
+            _cap = cv2.VideoCapture(camera_index)
+
+        if not _cap.isOpened():
+            with _lock:
+                _state["status"] = "idle"
+                _state["tracking"] = False
+            return
 
     udp_sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     udp_dest = (UDP_HOST, UDP_PORT)
@@ -98,7 +110,15 @@ def _tracker_loop(backend, camera_index, follow_mode):
 
     try:
         while not _stop_event.is_set():
-            ok, frame = _cap.read()
+            if use_realsense:
+                frames = _camera_reader.get_frames()
+                frame = frames.get("rgb")
+                if frame is None:
+                    time.sleep(0.03)
+                    continue
+                ok = True
+            else:
+                ok, frame = _cap.read()
             if not ok:
                 break
 
@@ -223,7 +243,7 @@ def _tracker_loop(backend, camera_index, follow_mode):
         udp_sock.close()
         if _detector:
             _detector.close()
-        if _cap:
+        if _cap and not use_realsense:
             _cap.release()
         with _lock:
             _state.update(status="idle", tracking=False, rot_speed=0.0, vx=0.0)
@@ -297,7 +317,7 @@ def face_status():
         return dict(_state)
 
 
-@router.get("/stream", dependencies=[])  # skip auth for MJPEG
+@stream_router.get("/stream")
 def face_stream():
     def _generate():
         while True:

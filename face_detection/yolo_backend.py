@@ -13,7 +13,7 @@ import urllib.request
 from .base import FaceDetector, Detection
 
 DEFAULT_MODEL = "yolov8n-face.pt"
-MODEL_URL = "https://github.com/akanametov/yolov8-face/releases/download/v0.0.0/yolov8n-face.pt"
+MODEL_URL = "https://github.com/akanametov/yolo-face/releases/download/v0.0.0/yolov8n-face.pt"
 MODEL_DIR = os.path.dirname(os.path.abspath(__file__))
 
 

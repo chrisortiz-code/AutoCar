@@ -4,6 +4,10 @@ import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
@@ -50,6 +54,8 @@ fun LidarPolarPlot(
     modifier: Modifier = Modifier,
 ) {
     val textMeasurer = rememberTextMeasurer()
+    // Persist rangeM across recompositions for smooth scaling
+    var rangeM by remember { mutableStateOf(1f) }
 
     Canvas(
         modifier = modifier
@@ -68,7 +74,10 @@ fun LidarPolarPlot(
             if (p.dist_mm > maxDist) maxDist = p.dist_mm
         }
         val dataMaxM = maxDist / 1000f
-        val rangeM = max(0.5f, dataMaxM * 1.1f)
+        val targetM = max(0.5f, dataMaxM * 1.1f)
+        // Smooth transition like the HTML viewer
+        rangeM = rangeM + (targetM - rangeM) * 0.3f
+        if (rangeM < 0.5f) rangeM = 0.5f
 
         // Background
         drawRect(BgColor, Offset.Zero, Size(w, h))

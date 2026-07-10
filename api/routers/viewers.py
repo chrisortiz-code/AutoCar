@@ -148,7 +148,7 @@ function drawScan(points) {
     const color = distColor(m, rangeM);
     // Connect to previous point if angle gap is small (same surface)
     const distGap = prevX !== null ? Math.hypot(x - prevX, y - prevY) : 999;
-    if (prevX !== null && (p.angle - prevAngle) < 2 && distGap < R_MAX * 0.08) {
+    if (prevX !== null && (p.angle - prevAngle) < 2 && distGap < 12) {
       ctx.strokeStyle = color;
       ctx.lineWidth = 2;
       ctx.beginPath();

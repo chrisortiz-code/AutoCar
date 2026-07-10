@@ -146,14 +146,28 @@ function drawScan(points) {
   if (rangeM < MIN_RANGE_M) rangeM = MIN_RANGE_M;
 
   drawGrid(rangeM);
+  // Sort by angle so we can connect nearby points as line segments
+  valid.sort((a, b) => a.angle - b.angle);
+  let prevX = null, prevY = null, prevAngle = -999;
   for (const p of valid) {
     const m = p.dist_mm / 1000;
     const rad = (p.angle - 90) * Math.PI / 180;
     const r = (m / rangeM) * R_MAX;
     const x = CX + r * Math.cos(rad);
     const y = CY + r * Math.sin(rad);
-    ctx.fillStyle = distColor(m, rangeM);
-    ctx.fillRect(x - 1.5, y - 1.5, 3, 3);
+    const color = distColor(m, rangeM);
+    // Connect to previous point if angle gap is small (same surface)
+    if (prevX !== null && (p.angle - prevAngle) < 3) {
+      ctx.strokeStyle = color;
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.moveTo(prevX, prevY);
+      ctx.lineTo(x, y);
+      ctx.stroke();
+    }
+    ctx.fillStyle = color;
+    ctx.fillRect(x - 2, y - 2, 4, 4);
+    prevX = x; prevY = y; prevAngle = p.angle;
   }
 }
 

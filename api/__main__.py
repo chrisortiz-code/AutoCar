@@ -26,9 +26,9 @@ def main():
                         help="Disable camera reader")
     parser.add_argument("--no-lidar", action="store_true",
                         help="Disable lidar reader")
-    parser.add_argument("--cam-width", type=int, default=424, help="Camera width")
-    parser.add_argument("--cam-height", type=int, default=240, help="Camera height")
-    parser.add_argument("--cam-fps", type=int, default=15, help="Camera FPS")
+    parser.add_argument("--cam-width", type=int, default=848, help="Camera width")
+    parser.add_argument("--cam-height", type=int, default=480, help="Camera height")
+    parser.add_argument("--cam-fps", type=int, default=30, help="Camera FPS")
     parser.add_argument("--scan-mode", type=int, default=0, choices=[0, 1, 2],
                         help="Lidar scan mode: 0=Standard (default), 1=DenseBoost, 2=UltraDense")
     parser.add_argument("--reload", action="store_true",

@@ -81,7 +81,7 @@ def root():
 
 # ── Startup / shutdown ────────────────────────────────────────────────
 
-def configure(*, demo=False, no_camera=False, no_lidar=False, cam_width=424, cam_height=240, cam_fps=15, scan_mode=0):
+def configure(*, demo=False, no_camera=False, no_lidar=False, cam_width=848, cam_height=480, cam_fps=30, scan_mode=0):
     """Configure sensor readers before server starts.
 
     Called from __main__.py with CLI flags.

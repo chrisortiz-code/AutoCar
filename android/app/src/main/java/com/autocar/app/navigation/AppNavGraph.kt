@@ -317,7 +317,13 @@ private fun ColumnScope.GridLayout(gamepadManager: GamepadManager) {
                     Icon(Icons.Default.Close, contentDescription = "Close", tint = Gold)
                 }
             }
-        } else {
+        } else when (viewport) {
+            // Face / Track — full viewport like classic layout
+            Viewport.Face -> Box(modifier = Modifier.weight(1f)) { FaceViewport() }
+            Viewport.Track -> Box(modifier = Modifier.weight(1f)) { ObjectTrackViewport() }
+
+            // Sensors — 2x2 grid with hold-to-enlarge
+            Viewport.Sensors -> {
             // Two-column layout: cameras left, lidar + panel right
             Row(modifier = Modifier.weight(1f)) {
                 // Left column — RGB + Depth stacked (wider to show feeds)
@@ -416,6 +422,7 @@ private fun ColumnScope.GridLayout(gamepadManager: GamepadManager) {
                         }
                     }
                 }
+            }
             }
         }
     }

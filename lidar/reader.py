@@ -238,17 +238,30 @@ class LidarReader:
                 except Exception:
                     print(f"  using mode: {scan_mode}")
 
-                resync_count = 0
                 while not self._stop.is_set():
                     try:
                         self._run_scan_loop(lidar, scan_mode)
-                        resync_count = 0
                     except Exception as e:
-                        resync_count += 1
-                        print(f"  scan restart failed ({e}), attempt {resync_count}...")
+                        print(f"  scan error ({e}), reconnecting...")
                         self._resync(lidar)
-                        if resync_count >= 10:
-                            raise RuntimeError(f"Too many resync failures: {e}")
+                        # Full reconnect: disconnect and re-establish from scratch
+                        try:
+                            lidar.disconnect()
+                        except Exception:
+                            pass
+                        time.sleep(1.0)
+                        try:
+                            lidar.connect(port=self.port, baudrate=self.baudrate, timeout=3)
+                            if hasattr(lidar, '_serial') and lidar._serial:
+                                lidar._serial.reset_input_buffer()
+                            time.sleep(0.5)
+                            self._lidar = lidar
+                            lidar.set_motor_pwm(self.motor_pwm)
+                            time.sleep(1.0)
+                            print("  reconnected, resuming scan...")
+                        except Exception as e2:
+                            print(f"  reconnect failed ({e2}), retrying in 3s...")
+                            time.sleep(3.0)
         except Exception as exc:
             with self._lock:
                 self._connected = False

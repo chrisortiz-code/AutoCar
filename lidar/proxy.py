@@ -19,10 +19,11 @@ class LidarProxy:
     """Runs `python -m lidar.viewer` as a subprocess on its own port,
     polls /scan for fresh data."""
 
-    def __init__(self, port, *, demo=False, viewer_port=8092):
+    def __init__(self, port, *, demo=False, viewer_port=8092, scan_mode=0):
         self.port = port          # serial port (or "demo")
         self.demo = demo
         self.viewer_port = viewer_port
+        self.scan_mode = scan_mode
         self._process = None
         self._poll_thread = None
         self._stop = threading.Event()
@@ -44,6 +45,7 @@ class LidarProxy:
         cmd = [
             sys.executable, "-m", "lidar.viewer",
             "--web-port", str(self.viewer_port),
+            "--scan-mode", str(self.scan_mode),
         ]
         if self.demo:
             cmd.append("--demo")
@@ -140,6 +142,7 @@ class LidarProxy:
         cmd = [
             sys.executable, "-m", "lidar.viewer",
             "--web-port", str(self.viewer_port),
+            "--scan-mode", str(self.scan_mode),
         ]
         if self.demo:
             cmd.append("--demo")

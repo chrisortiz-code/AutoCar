@@ -61,11 +61,11 @@ fun LidarPolarPlot(
     var stableRangeM by remember { mutableFloatStateOf(3f) }
     val targetRangeM = remember(points) {
         if (points.size < 10) return@remember stableRangeM
-        var maxDist = 0f
-        for (p in points) {
-            if (p.dist_mm > maxDist) maxDist = p.dist_mm
-        }
-        val target = max(1f, (maxDist / 1000f) * 1.1f)
+        // Use 95th percentile distance to ignore sparse noise at extreme ranges
+        val dists = points.mapNotNull { p -> if (p.dist_mm > 0f) p.dist_mm else null }.sorted()
+        if (dists.isEmpty()) return@remember stableRangeM
+        val p95 = dists[(dists.size * 0.95f).toInt().coerceAtMost(dists.size - 1)]
+        val target = max(1f, (p95 / 1000f) * 1.1f)
         stableRangeM = target
         target
     }

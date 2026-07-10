@@ -246,9 +246,10 @@ class LidarReader:
                     try:
                         self._run_scan_loop(lidar, scan_mode)
                     except Exception as e:
-                        print(f"  scan error ({e}), reconnecting...")
+                        if self._stop.is_set():
+                            break
+                        print(f"  {e}, reconnecting...")
                         self._resync(lidar)
-                        # Full reconnect: disconnect and re-establish from scratch
                         try:
                             lidar.disconnect()
                         except Exception:
@@ -366,13 +367,13 @@ class LidarReader:
                         rev_dt = now - last_rev_time
                         rev_hz = 1.0 / rev_dt if rev_dt > 0 else 999
 
-                        # S2 max spin is ~15Hz. Anything above 30Hz is corrupt data.
+                        # S2 max spin is ~15Hz. Anything above 30Hz is likely corrupt data,
+                        # but angle jitter near 360/0 boundary can cause occasional false
+                        # positives — require 5 consecutive before declaring corruption.
                         if rev_hz > 30:
                             false_revs += 1
-                            if false_revs >= 3:
-                                print(f"  corrupt data detected ({rev_hz:.0f}Hz), re-syncing...")
-                                self._resync(lidar)
-                                return  # restart scan loop
+                            if false_revs >= 5:
+                                raise RuntimeError(f"corrupt data ({rev_hz:.0f}Hz)")
                         else:
                             false_revs = 0
                             scan_times.append(rev_dt)
@@ -394,9 +395,8 @@ class LidarReader:
                     ]
                     with self._lock:
                         self._scan = snapshot
-        except Exception as e:
-            print(f"  scan error: {e}, re-syncing...")
-            self._resync(lidar)
+        except Exception:
+            raise  # let outer loop handle reconnect
 
     def _resync(self, lidar):
         """Stop scan, flush serial buffer, and pause before restarting."""

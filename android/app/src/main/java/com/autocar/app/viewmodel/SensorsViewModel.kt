@@ -45,13 +45,19 @@ class SensorsViewModel(app: Application) : AndroidViewModel(app) {
         _depthUrl.value = baseUrl.trimEnd('/') + "/api/sensors/camera/depth"
 
         val client = ApiClient.okHttpClient(token)
-        sensorSocket = SensorSocket(client)
 
-        try {
-            sensorSocket!!.connect(baseUrl).collect { update ->
-                _sensorUpdate.value = update
-            }
-        } catch (_: Exception) {}
+        // Auto-reconnect loop: if the WebSocket drops, retry after a delay
+        while (true) {
+            sensorSocket?.disconnect()
+            sensorSocket = SensorSocket(client)
+            try {
+                sensorSocket!!.connect(baseUrl).collect { update ->
+                    _sensorUpdate.value = update
+                }
+            } catch (_: Exception) {}
+            // Connection lost — wait then reconnect
+            kotlinx.coroutines.delay(2000)
+        }
     }
 
     fun fetchStatus() = viewModelScope.launch {

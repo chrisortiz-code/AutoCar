@@ -166,6 +166,33 @@ def delete_path(pid: int):
     return {"ok": True}
 
 
+@router.post("/paths/{pid}/steps")
+def set_steps(pid: int, steps: list[dict]):
+    p = path_db.get_path(pid)
+    if not p:
+        raise HTTPException(404, "not found")
+    path_db.set_steps(pid, steps)
+    return {"ok": True}
+
+
+@router.get("/paths/{pid}/preview")
+def preview_path(pid: int, num_coefficients: int = 50):
+    p = path_db.get_path(pid)
+    if not p:
+        raise HTTPException(404, "not found")
+    result = path_db.recompress_continuous(pid, num_coefficients)
+    if result is None:
+        raise HTTPException(400, "not a continuous path")
+    vx, vy, ts, rs = zip(*result) if result else ([], [], [], [])
+    info = path_db.get_continuous_info(pid)
+    return {
+        "vx": list(vx), "vy": list(vy),
+        "trans_speed": list(ts), "rot_speed": list(rs),
+        "num_samples": info["num_samples"] if info else 0,
+        "sample_rate": info["sample_rate"] if info else 0,
+    }
+
+
 @router.post("/paths/{pid}/execute")
 def execute_path(pid: int):
     with _state_lock:
@@ -216,6 +243,16 @@ def record_sample(body: RecordSample):
     with _state_lock:
         _state["samples"] = _recorder.num_samples
     return {"ok": True, "samples": _recorder.num_samples}
+
+
+@router.get("/record/status")
+def record_status():
+    with _state_lock:
+        is_rec = _state["status"] == "recording"
+    return {
+        "recording": is_rec,
+        "samples": _state.get("samples", 0) if is_rec else 0,
+    }
 
 
 @router.post("/record/stop")

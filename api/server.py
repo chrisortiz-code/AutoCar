@@ -73,14 +73,15 @@ def root():
             "track": "/api/track",
             "obstacles": "/api/obstacles",
             "websocket": "/api/ws/sensors",
-            "viewers": "/viewer/{lidar,camera,obstacles}",
+            "dashboard": "/viewer/dashboard",
+            "viewers": "/viewer/{lidar,camera,obstacles,drive,paths}",
         },
     }
 
 
 # ── Startup / shutdown ────────────────────────────────────────────────
 
-def configure(*, demo=False, no_camera=False, no_lidar=False, cam_width=424, cam_height=240, cam_fps=15):
+def configure(*, demo=False, no_camera=False, no_lidar=False, cam_width=424, cam_height=240, cam_fps=15, scan_mode=0):
     """Configure sensor readers before server starts.
 
     Called from __main__.py with CLI flags.
@@ -110,12 +111,12 @@ def configure(*, demo=False, no_camera=False, no_lidar=False, cam_width=424, cam
             from lidar.proxy import LidarProxy
             from lidar.reader import list_serial_ports
             if demo:
-                lidar = LidarProxy("demo", demo=True)
+                lidar = LidarProxy("demo", demo=True, scan_mode=scan_mode)
             else:
                 ports = list_serial_ports()
                 port = ports[0] if len(ports) == 1 else None
                 if port:
-                    lidar = LidarProxy(port)
+                    lidar = LidarProxy(port, scan_mode=scan_mode)
                 else:
                     print(f"Lidar: no port found (available: {ports})")
             if lidar:

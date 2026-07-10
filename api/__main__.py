@@ -29,6 +29,8 @@ def main():
     parser.add_argument("--cam-width", type=int, default=424, help="Camera width")
     parser.add_argument("--cam-height", type=int, default=240, help="Camera height")
     parser.add_argument("--cam-fps", type=int, default=15, help="Camera FPS")
+    parser.add_argument("--scan-mode", type=int, default=0, choices=[0, 1, 2],
+                        help="Lidar scan mode: 0=Standard (default), 1=DenseBoost, 2=UltraDense")
     parser.add_argument("--reload", action="store_true",
                         help="Enable auto-reload for development")
     args = parser.parse_args()
@@ -36,7 +38,8 @@ def main():
     from api.server import app, configure
 
     configure(demo=args.demo, no_camera=args.no_camera, no_lidar=args.no_lidar,
-              cam_width=args.cam_width, cam_height=args.cam_height, cam_fps=args.cam_fps)
+              cam_width=args.cam_width, cam_height=args.cam_height, cam_fps=args.cam_fps,
+              scan_mode=args.scan_mode)
 
     from api.udp import UDP_HOST, UDP_PORT
     print(f"\nAutoCar API server starting on http://{args.host}:{args.port}")

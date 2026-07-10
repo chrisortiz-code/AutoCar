@@ -26,13 +26,17 @@ def main():
                         help="Disable camera reader")
     parser.add_argument("--no-lidar", action="store_true",
                         help="Disable lidar reader")
+    parser.add_argument("--cam-width", type=int, default=424, help="Camera width")
+    parser.add_argument("--cam-height", type=int, default=240, help="Camera height")
+    parser.add_argument("--cam-fps", type=int, default=15, help="Camera FPS")
     parser.add_argument("--reload", action="store_true",
                         help="Enable auto-reload for development")
     args = parser.parse_args()
 
     from api.server import app, configure
 
-    configure(demo=args.demo, no_camera=args.no_camera, no_lidar=args.no_lidar)
+    configure(demo=args.demo, no_camera=args.no_camera, no_lidar=args.no_lidar,
+              cam_width=args.cam_width, cam_height=args.cam_height, cam_fps=args.cam_fps)
 
     from api.udp import UDP_HOST, UDP_PORT
     print(f"\nAutoCar API server starting on http://{args.host}:{args.port}")

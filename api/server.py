@@ -80,7 +80,7 @@ def root():
 
 # ── Startup / shutdown ────────────────────────────────────────────────
 
-def configure(*, demo=False, no_camera=False, no_lidar=False):
+def configure(*, demo=False, no_camera=False, no_lidar=False, cam_width=424, cam_height=240, cam_fps=15):
     """Configure sensor readers before server starts.
 
     Called from __main__.py with CLI flags.
@@ -99,7 +99,7 @@ def configure(*, demo=False, no_camera=False, no_lidar=False):
     if not no_camera:
         try:
             from camera.reader import CameraReader
-            camera = CameraReader(demo=demo)
+            camera = CameraReader(demo=demo, width=cam_width, height=cam_height, fps=cam_fps)
             camera.start()
             print(f"Camera: {'demo mode' if demo else 'hardware'}")
         except Exception as e:

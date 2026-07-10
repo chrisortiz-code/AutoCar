@@ -99,13 +99,14 @@ def list_serial_ports():
 class LidarReader:
     """Background scan reader for RPLIDAR devices."""
 
-    def __init__(self, port, *, baudrate=1_000_000, scan_type='express', demo=False, motor_pwm=660, use_normal_scan=False):
+    def __init__(self, port, *, baudrate=1_000_000, scan_type='express', demo=False, motor_pwm=660, use_normal_scan=False, express_mode=None):
         self.port = port
         self.baudrate = baudrate
         self.scan_type = scan_type
         self.demo = demo
         self.motor_pwm = motor_pwm
         self.use_normal_scan = use_normal_scan
+        self.express_mode = express_mode  # None=use typical, 0=Standard, 1=DenseBoost, 2=UltraDense
         self._lidar = None
         self._lock = threading.Lock()
         self._stop = threading.Event()
@@ -230,13 +231,16 @@ class LidarReader:
                 print("  using NORMAL scan (fewer points, lower bandwidth)")
                 self._run_normal_scan(lidar)
             else:
-                # S2 supports: mode 0 = Standard (broken), mode 1 = DenseBoost (correct)
-                scan_mode = 1  # DenseBoost
-                try:
-                    typical_id = lidar.get_scan_mode_typical()
-                    print(f"  device typical mode: {typical_id}, using mode: {scan_mode}")
-                except Exception:
-                    print(f"  using mode: {scan_mode}")
+                # S2 modes: 0=Standard, 1=DenseBoost, 2=UltraDense
+                if self.express_mode is not None:
+                    scan_mode = self.express_mode
+                else:
+                    try:
+                        scan_mode = lidar.get_scan_mode_typical()
+                    except Exception:
+                        scan_mode = 1
+                mode_names = {0: "Standard", 1: "DenseBoost", 2: "UltraDense"}
+                print(f"  scan mode: {scan_mode} ({mode_names.get(scan_mode, '?')})")
 
                 while not self._stop.is_set():
                     try:
@@ -461,6 +465,8 @@ def main():
                         help="Motor PWM (lower = slower spin, default 660)")
     parser.add_argument("--normal", action="store_true",
                         help="Use normal scan mode (fewer points, lower bandwidth)")
+    parser.add_argument("--scan-mode", type=int, default=None, choices=[0, 1, 2],
+                        help="Express scan mode: 0=Standard, 1=DenseBoost, 2=UltraDense")
     parser.add_argument("--demo", action="store_true",
                         help="Run without hardware (synthetic scan)")
     args = parser.parse_args()
@@ -489,7 +495,7 @@ def main():
         else:
             parser.error("Specify --port, --gpio, or use --demo. Run with --list-ports to see devices.")
 
-    reader = LidarReader(port or "demo", baudrate=baud, scan_type=scan_type, demo=args.demo, motor_pwm=args.motor_pwm, use_normal_scan=args.normal)
+    reader = LidarReader(port or "demo", baudrate=baud, scan_type=scan_type, demo=args.demo, motor_pwm=args.motor_pwm, use_normal_scan=args.normal, express_mode=args.scan_mode)
     reader.start()
     print("Streaming scans (Ctrl+C to stop)...")
     try:

@@ -293,6 +293,8 @@ def main():
                         help="Motor PWM (lower = slower spin, default 660)")
     parser.add_argument("--normal", action="store_true",
                         help="Use normal scan mode (fewer points, lower bandwidth)")
+    parser.add_argument("--scan-mode", type=int, default=None, choices=[0, 1, 2],
+                        help="Express scan mode: 0=Standard, 1=DenseBoost, 2=UltraDense")
     parser.add_argument("--demo", action="store_true",
                         help="Run without hardware (synthetic scan)")
     parser.add_argument("--web-port", type=int, default=8092,
@@ -323,7 +325,7 @@ def main():
         else:
             parser.error("Specify --port, --gpio, or use --demo. Run with --list-ports to see devices.")
 
-    reader = LidarReader(serial_port or "demo", baudrate=baud, scan_type=scan_type, demo=args.demo, motor_pwm=args.motor_pwm, use_normal_scan=args.normal)
+    reader = LidarReader(serial_port or "demo", baudrate=baud, scan_type=scan_type, demo=args.demo, motor_pwm=args.motor_pwm, use_normal_scan=args.normal, express_mode=args.scan_mode)
     reader.start()
     server = ScanServer(reader, port=args.web_port)
     print(f"RPLIDAR viewer at http://localhost:{args.web_port}")

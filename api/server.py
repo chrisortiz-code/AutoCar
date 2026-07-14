@@ -43,6 +43,7 @@ from api.routers.paths import router as paths_router
 from api.routers.sensors import router as sensors_router, stream_router as sensors_stream_router
 from api.routers.face import router as face_router, stream_router as face_stream_router
 from api.routers.object_track import router as track_router, stream_router as track_stream_router
+from api.routers.color_track import router as color_router, stream_router as color_stream_router
 from api.routers.obstacles import router as obstacles_router, stream_router as obstacles_stream_router
 from api.routers.viewers import router as viewers_router
 
@@ -54,6 +55,8 @@ app.include_router(face_router)
 app.include_router(face_stream_router)
 app.include_router(track_router)
 app.include_router(track_stream_router)
+app.include_router(color_router)
+app.include_router(color_stream_router)
 app.include_router(obstacles_router)
 app.include_router(obstacles_stream_router)
 app.include_router(viewers_router)
@@ -71,6 +74,7 @@ def root():
             "sensors": "/api/sensors",
             "face": "/api/face",
             "track": "/api/track",
+            "color": "/api/color",
             "obstacles": "/api/obstacles",
             "websocket": "/api/ws/sensors",
             "dashboard": "/viewer/dashboard",
@@ -134,6 +138,8 @@ def configure(*, demo=False, no_camera=False, no_lidar=False, cam_width=848, cam
         set_camera_reader(camera)
         from api.routers.object_track import set_camera_reader as set_track_camera
         set_track_camera(camera)
+        from api.routers.color_track import set_camera_reader as set_color_camera
+        set_color_camera(camera)
         from api.routers.obstacles import set_camera_reader as set_obstacles_camera
         set_obstacles_camera(camera)
 

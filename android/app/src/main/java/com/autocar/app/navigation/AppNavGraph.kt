@@ -25,6 +25,7 @@ import androidx.compose.material.icons.filled.Face
 import androidx.compose.material.icons.filled.Gamepad
 import androidx.compose.material.icons.filled.Route
 import androidx.compose.material.icons.filled.CenterFocusStrong
+import androidx.compose.material.icons.filled.Palette
 import androidx.compose.material.icons.filled.Sensors
 import androidx.compose.material.icons.filled.SportsEsports
 import androidx.compose.material3.Icon
@@ -66,6 +67,7 @@ import com.autocar.app.ui.components.GamepadControlsButton
 import com.autocar.app.ui.components.GamepadNavEffect
 import com.autocar.app.ui.components.LidarPolarPlot
 import com.autocar.app.ui.components.MjpegView
+import com.autocar.app.ui.components.ColorViewport
 import com.autocar.app.ui.components.ObjectTrackViewport
 import com.autocar.app.ui.components.SensorViewport
 import com.autocar.app.ui.components.SidePanel
@@ -82,12 +84,14 @@ import com.autocar.app.viewmodel.FaceViewModel
 import com.autocar.app.viewmodel.PathsViewModel
 import com.autocar.app.viewmodel.SensorsViewModel
 import com.autocar.app.viewmodel.SettingsViewModel
+import com.autocar.app.viewmodel.ColorViewModel
 import com.autocar.app.viewmodel.TrackViewModel
 
 enum class NavTab(val label: String, val icon: ImageVector) {
     Sensors("Sensors", Icons.Default.Sensors),
     Face("Face", Icons.Default.Face),
     Track("Track", Icons.Default.CenterFocusStrong),
+    Color("Color", Icons.Default.Palette),
     Dashboard("Dashboard", Icons.Default.Dashboard),
     Drive("Drive", Icons.Default.Gamepad),
     Paths("Paths", Icons.Default.Route),
@@ -98,6 +102,7 @@ private enum class Viewport(val label: String, val icon: ImageVector) {
     Sensors("Sensors", Icons.Default.Sensors),
     Face("Face", Icons.Default.Face),
     Track("Track", Icons.Default.CenterFocusStrong),
+    Color("Color", Icons.Default.Palette),
 }
 
 /** Tabs shown in the right rail (tablet landscape) — side-panel content. */
@@ -121,6 +126,7 @@ fun AppNavGraph(
     var faceMode by remember { mutableStateOf("trace") }
     var trackBackend by remember { mutableStateOf("orb") }
     var trackFollowMode by remember { mutableStateOf(true) }
+    var colorFollowMode by remember { mutableStateOf(true) }
     var pathsSelectedIndex by remember { mutableIntStateOf(0) }
 
     // Grid layout state (hoisted for gamepad access)
@@ -150,6 +156,7 @@ fun AppNavGraph(
     // ViewModels shared with GamepadNavEffect
     val faceVm: FaceViewModel = viewModel()
     val trackVm: TrackViewModel = viewModel()
+    val colorVm: ColorViewModel = viewModel()
     val driveVm: DriveViewModel = viewModel()
     val pathsVm: PathsViewModel = viewModel()
 
@@ -215,6 +222,7 @@ fun AppNavGraph(
                         selectedTab = selectedTab,
                         faceVm = faceVm,
                         trackVm = trackVm,
+                        colorVm = colorVm,
                         driveVm = driveVm,
                         pathsVm = pathsVm,
                         faceBackend = faceBackend,
@@ -225,6 +233,8 @@ fun AppNavGraph(
                         onTrackBackendChange = { trackBackend = it },
                         trackFollowMode = trackFollowMode,
                         onTrackFollowModeChange = { trackFollowMode = it },
+                        colorFollowMode = colorFollowMode,
+                        onColorFollowModeChange = { colorFollowMode = it },
                         pathsSelectedIndex = pathsSelectedIndex,
                         gamepadConnected = gamepadConnected,
                         showChrome = showChrome,
@@ -239,6 +249,7 @@ fun AppNavGraph(
                         selectedTab = selectedTab,
                         faceVm = faceVm,
                         trackVm = trackVm,
+                        colorVm = colorVm,
                         driveVm = driveVm,
                         pathsVm = pathsVm,
                         faceBackend = faceBackend,
@@ -249,6 +260,8 @@ fun AppNavGraph(
                         onTrackBackendChange = { trackBackend = it },
                         trackFollowMode = trackFollowMode,
                         onTrackFollowModeChange = { trackFollowMode = it },
+                        colorFollowMode = colorFollowMode,
+                        onColorFollowModeChange = { colorFollowMode = it },
                         pathsSelectedIndex = pathsSelectedIndex,
                         gamepadConnected = gamepadConnected,
                         showChrome = showChrome,
@@ -263,6 +276,7 @@ fun AppNavGraph(
                     onTabChange = { selectedTab = it },
                     faceVm = faceVm,
                     trackVm = trackVm,
+                    colorVm = colorVm,
                     driveVm = driveVm,
                     pathsVm = pathsVm,
                     faceBackend = faceBackend,
@@ -273,6 +287,8 @@ fun AppNavGraph(
                     onTrackBackendChange = { trackBackend = it },
                     trackFollowMode = trackFollowMode,
                     onTrackFollowModeChange = { trackFollowMode = it },
+                    colorFollowMode = colorFollowMode,
+                    onColorFollowModeChange = { colorFollowMode = it },
                     pathsSelectedIndex = pathsSelectedIndex,
                     gamepadConnected = gamepadConnected,
                     showChrome = showChrome,
@@ -347,6 +363,7 @@ private fun ColumnScope.TabletLandscapeLayout(
     selectedTab: NavTab,
     faceVm: FaceViewModel,
     trackVm: TrackViewModel,
+    colorVm: ColorViewModel,
     driveVm: DriveViewModel,
     pathsVm: PathsViewModel,
     faceBackend: String,
@@ -357,6 +374,8 @@ private fun ColumnScope.TabletLandscapeLayout(
     onTrackBackendChange: (String) -> Unit,
     trackFollowMode: Boolean,
     onTrackFollowModeChange: (Boolean) -> Unit,
+    colorFollowMode: Boolean,
+    onColorFollowModeChange: (Boolean) -> Unit,
     pathsSelectedIndex: Int,
     gamepadConnected: Boolean,
     showChrome: Boolean = true,
@@ -371,6 +390,7 @@ private fun ColumnScope.TabletLandscapeLayout(
             NavTab.Sensors -> { viewport = Viewport.Sensors; onActiveTabChange(null) }
             NavTab.Face -> { viewport = Viewport.Face; onActiveTabChange(null) }
             NavTab.Track -> { viewport = Viewport.Track; onActiveTabChange(null) }
+            NavTab.Color -> { viewport = Viewport.Color; onActiveTabChange(null) }
             NavTab.Dashboard -> onActiveTabChange(NavTab.Dashboard)
             NavTab.Drive -> onActiveTabChange(NavTab.Drive)
             NavTab.Paths -> onActiveTabChange(NavTab.Paths)
@@ -418,6 +438,11 @@ private fun ColumnScope.TabletLandscapeLayout(
                     onBackendChange = onTrackBackendChange,
                     followMode = trackFollowMode,
                     onFollowModeChange = onTrackFollowModeChange,
+                )
+                Viewport.Color -> ColorViewport(
+                    colorVm = colorVm,
+                    followMode = colorFollowMode,
+                    onFollowModeChange = onColorFollowModeChange,
                 )
             }
         }
@@ -478,6 +503,7 @@ private fun ColumnScope.GridLayout(
     selectedTab: NavTab,
     faceVm: FaceViewModel,
     trackVm: TrackViewModel,
+    colorVm: ColorViewModel,
     driveVm: DriveViewModel,
     pathsVm: PathsViewModel,
     faceBackend: String,
@@ -488,6 +514,8 @@ private fun ColumnScope.GridLayout(
     onTrackBackendChange: (String) -> Unit,
     trackFollowMode: Boolean,
     onTrackFollowModeChange: (Boolean) -> Unit,
+    colorFollowMode: Boolean,
+    onColorFollowModeChange: (Boolean) -> Unit,
     pathsSelectedIndex: Int,
     gamepadConnected: Boolean,
     showChrome: Boolean = true,
@@ -512,6 +540,7 @@ private fun ColumnScope.GridLayout(
             NavTab.Sensors -> { viewport = Viewport.Sensors; onExpandedCellChange(null) }
             NavTab.Face -> { viewport = Viewport.Face; onExpandedCellChange(null) }
             NavTab.Track -> { viewport = Viewport.Track; onExpandedCellChange(null) }
+            NavTab.Color -> { viewport = Viewport.Color; onExpandedCellChange(null) }
             NavTab.Dashboard -> { onExpandedCellChange(GridCell.Panel); onPanelTabChange(0) }
             NavTab.Drive -> { onExpandedCellChange(GridCell.Panel); onPanelTabChange(1) }
             NavTab.Paths -> { onExpandedCellChange(GridCell.Panel); onPanelTabChange(2) }
@@ -624,6 +653,13 @@ private fun ColumnScope.GridLayout(
                     onBackendChange = onTrackBackendChange,
                     followMode = trackFollowMode,
                     onFollowModeChange = onTrackFollowModeChange,
+                )
+            }
+            Viewport.Color -> Box(modifier = Modifier.weight(1f)) {
+                ColorViewport(
+                    colorVm = colorVm,
+                    followMode = colorFollowMode,
+                    onFollowModeChange = onColorFollowModeChange,
                 )
             }
 
@@ -746,6 +782,7 @@ private fun ColumnScope.PhoneLayout(
     onTabChange: (NavTab) -> Unit,
     faceVm: FaceViewModel,
     trackVm: TrackViewModel,
+    colorVm: ColorViewModel,
     driveVm: DriveViewModel,
     pathsVm: PathsViewModel,
     faceBackend: String,
@@ -756,6 +793,8 @@ private fun ColumnScope.PhoneLayout(
     onTrackBackendChange: (String) -> Unit,
     trackFollowMode: Boolean,
     onTrackFollowModeChange: (Boolean) -> Unit,
+    colorFollowMode: Boolean,
+    onColorFollowModeChange: (Boolean) -> Unit,
     pathsSelectedIndex: Int,
     gamepadConnected: Boolean,
     showChrome: Boolean = true,
@@ -776,6 +815,11 @@ private fun ColumnScope.PhoneLayout(
                 onBackendChange = onTrackBackendChange,
                 followMode = trackFollowMode,
                 onFollowModeChange = onTrackFollowModeChange,
+            )
+            NavTab.Color -> ColorViewport(
+                colorVm = colorVm,
+                followMode = colorFollowMode,
+                onFollowModeChange = onColorFollowModeChange,
             )
             NavTab.Dashboard -> DashboardScreen()
             NavTab.Drive -> DriveScreen(gamepadManager = gamepadManager, driveVm = driveVm)

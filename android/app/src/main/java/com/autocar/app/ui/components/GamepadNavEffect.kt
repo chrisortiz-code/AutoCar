@@ -125,8 +125,8 @@ fun GamepadNavEffect(
 
             for (button in newPresses) {
                 when (button) {
-                    // ── Global: Map/touchpad = cycle UI scale ──
-                    KeyEvent.KEYCODE_BUTTON_MODE -> curOnScaleCycle()
+                    // ── Global: L3 (left stick click) = cycle UI scale ──
+                    KeyEvent.KEYCODE_BUTTON_THUMBL -> curOnScaleCycle()
 
                     // ── Global: D-pad left/right switches tabs ──
                     KeyEvent.KEYCODE_DPAD_LEFT -> {
@@ -378,7 +378,7 @@ private fun ControlsContent(currentTab: NavTab) {
         ControlRow("D-pad L/R", "Switch tabs")
         ControlRow("Options", "Start")
         ControlRow("Share", "Stop")
-        ControlRow("Map", "Cycle UI scale")
+        ControlRow("L3", "Cycle UI scale")
 
         // Screen-specific
         when (currentTab) {
@@ -419,6 +419,9 @@ private fun ControlsContent(currentTab: NavTab) {
             NavTab.Sensors -> {
                 ControlRow("D-pad U/D", "Cycle feeds")
                 ControlRow("L1 / R1", "Cycle panel")
+            }
+            NavTab.Color -> {
+                ControlRow("Triangle", "Toggle follow")
             }
         }
     }

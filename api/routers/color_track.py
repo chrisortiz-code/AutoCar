@@ -52,9 +52,9 @@ def set_camera_reader(camera):
 
 
 # ── Configuration ─────────────────────────────────────────────────────
-HSV_TOL_H = 15
-HSV_TOL_S = 50
-HSV_TOL_V = 50
+HSV_TOL_H = 20
+HSV_TOL_S = 60
+HSV_TOL_V = 60
 MIN_BLOB = 500
 SAMPLE_SIZE = 5
 
@@ -315,12 +315,10 @@ def _tracker_loop(follow_mode):
                         last_control = now
 
                     # label even when not tracking (picking state)
-                    depth_label = ""
                     d = _sample_depth(depth_frame, bx, by)
                     if d > 0:
-                        depth_label = f" {d/1000:.2f}m"
-                    _draw_text(display, f"area={area}{depth_label}",
-                               (bx - 40, by - 15), (0, 255, 0))
+                        _draw_text(display, f"{d/1000:.2f}m",
+                                   (bx - 20, by - 15), (0, 255, 0))
 
                 elif tracking:
                     if now - last_control >= interval:

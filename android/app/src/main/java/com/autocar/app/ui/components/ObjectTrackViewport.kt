@@ -21,8 +21,6 @@ import androidx.compose.material3.FilterChip
 import androidx.compose.material3.FilterChipDefaults
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
-import androidx.compose.material3.Switch
-import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
@@ -51,8 +49,8 @@ fun ObjectTrackViewport(
     modifier: Modifier = Modifier,
     selectedBackend: String = "orb",
     onBackendChange: ((String) -> Unit)? = null,
-    followMode: Boolean = true,
-    onFollowModeChange: ((Boolean) -> Unit)? = null,
+    selectedMode: String = "trace",
+    onModeChange: ((String) -> Unit)? = null,
 ) {
     val trackState by trackVm.trackState.collectAsState()
     val streamUrl by trackVm.streamUrl.collectAsState()
@@ -64,11 +62,11 @@ fun ObjectTrackViewport(
 
     // Use hoisted state if callbacks provided, otherwise fall back to local state
     var localBackend by remember { mutableStateOf(selectedBackend) }
-    var localFollow by remember { mutableStateOf(followMode) }
+    var localMode by remember { mutableStateOf(selectedMode) }
     val activeBackend = if (onBackendChange != null) selectedBackend else localBackend
-    val activeFollow = if (onFollowModeChange != null) followMode else localFollow
+    val activeMode = if (onModeChange != null) selectedMode else localMode
     val setBackend: (String) -> Unit = onBackendChange ?: { localBackend = it }
-    val setFollow: (Boolean) -> Unit = onFollowModeChange ?: { localFollow = it }
+    val setMode: (String) -> Unit = onModeChange ?: { localMode = it }
 
     val status = trackState.status
     val isIdle = status == "idle"
@@ -123,27 +121,17 @@ fun ObjectTrackViewport(
                 }
             }
 
-            // ── Follow toggle ──
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                Text("Follow mode", style = MaterialTheme.typography.labelLarge, color = Gold)
-                Switch(
-                    checked = activeFollow,
-                    onCheckedChange = { setFollow(it) },
-                    colors = SwitchDefaults.colors(
-                        checkedThumbColor = Gold,
-                        checkedTrackColor = GoldDark.copy(alpha = 0.4f),
-                    ),
-                )
+            // ── Mode selector ──
+            Text("Mode", style = MaterialTheme.typography.labelLarge, color = Gold)
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                TrackModeButton("Trace", activeMode == "trace") { setMode("trace") }
+                TrackModeButton("Follow", activeMode == "follow") { setMode("follow") }
             }
 
             // ── Start button ──
             Button(
                 onClick = {
-                    trackVm.start(backend = activeBackend, follow = activeFollow)
+                    trackVm.start(backend = activeBackend, follow = activeMode == "follow")
                 },
                 modifier = Modifier.fillMaxWidth(),
                 colors = ButtonDefaults.buttonColors(containerColor = Gold),
@@ -247,6 +235,20 @@ private fun TrackStatusChip(status: String) {
             .padding(horizontal = 10.dp, vertical = 4.dp),
     ) {
         Text(label, color = color, style = MaterialTheme.typography.labelMedium)
+    }
+}
+
+@Composable
+private fun TrackModeButton(label: String, selected: Boolean, onClick: () -> Unit) {
+    OutlinedButton(
+        onClick = onClick,
+        colors = ButtonDefaults.outlinedButtonColors(
+            containerColor = if (selected) GoldDark.copy(alpha = 0.3f) else Color.Transparent,
+            contentColor = if (selected) Gold else MaterialTheme.colorScheme.onSurfaceVariant,
+        ),
+        border = ButtonDefaults.outlinedButtonBorder(selected),
+    ) {
+        Text(label)
     }
 }
 

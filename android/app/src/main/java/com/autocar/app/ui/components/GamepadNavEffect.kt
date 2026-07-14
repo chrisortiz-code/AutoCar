@@ -66,8 +66,8 @@ fun GamepadNavEffect(
     faceVm: FaceViewModel,
     trackBackend: String,
     onTrackBackendChange: (String) -> Unit,
-    trackFollowMode: Boolean,
-    onTrackFollowModeChange: (Boolean) -> Unit,
+    trackMode: String,
+    onTrackModeChange: (String) -> Unit,
     trackVm: TrackViewModel,
     driveVm: DriveViewModel,
     pathsVm: PathsViewModel,
@@ -92,8 +92,8 @@ fun GamepadNavEffect(
     val curOnFaceModeChange by rememberUpdatedState(onFaceModeChange)
     val curTrackBackend by rememberUpdatedState(trackBackend)
     val curOnTrackBackendChange by rememberUpdatedState(onTrackBackendChange)
-    val curTrackFollowMode by rememberUpdatedState(trackFollowMode)
-    val curOnTrackFollowModeChange by rememberUpdatedState(onTrackFollowModeChange)
+    val curTrackMode by rememberUpdatedState(trackMode)
+    val curOnTrackModeChange by rememberUpdatedState(onTrackModeChange)
     val curPathsSelectedIndex by rememberUpdatedState(pathsSelectedIndex)
     val curOnPathsSelectedIndexChange by rememberUpdatedState(onPathsSelectedIndexChange)
     val curPathsCount by rememberUpdatedState(pathsCount)
@@ -155,7 +155,7 @@ fun GamepadNavEffect(
                                 if (trackVm.trackState.value.status == "idle") {
                                     trackVm.start(
                                         backend = curTrackBackend,
-                                        follow = curTrackFollowMode,
+                                        follow = curTrackMode == "follow",
                                     )
                                 }
                             }
@@ -229,7 +229,7 @@ fun GamepadNavEffect(
                             }
                             NavTab.Track -> {
                                 if (trackVm.trackState.value.status == "idle") {
-                                    curOnTrackFollowModeChange(!curTrackFollowMode)
+                                    curOnTrackModeChange(if (curTrackMode == "trace") "follow" else "trace")
                                 }
                             }
                             else -> {}
@@ -393,7 +393,7 @@ private fun ControlsContent(currentTab: NavTab) {
             NavTab.Track -> {
                 SectionLabel("Idle")
                 ControlRow("L1 / R1", "Cycle backend")
-                ControlRow("Triangle", "Toggle follow")
+                ControlRow("Triangle", "Toggle Trace/Follow")
                 SectionLabel("Active")
                 ControlRow("Circle", "Reset tracker")
             }
@@ -421,7 +421,7 @@ private fun ControlsContent(currentTab: NavTab) {
                 ControlRow("L1 / R1", "Cycle panel")
             }
             NavTab.Color -> {
-                ControlRow("Triangle", "Toggle follow")
+                ControlRow("Triangle", "Toggle Trace/Follow")
             }
         }
     }

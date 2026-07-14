@@ -250,14 +250,14 @@ def _tracker_loop(backend, follow_mode):
                         cv2.putText(display, label, lpos,
                                     cv2.FONT_HERSHEY_SIMPLEX, 0.5, box_color, 1, cv2.LINE_AA)
 
-                        # Drive control
-                        if follow_mode:
-                            horiz_error = (match.cx - 0.5) / 0.5
-                            if abs(horiz_error) >= DEADZONE:
-                                rot_magnitude = (abs(horiz_error) - DEADZONE) / (1.0 - DEADZONE)
-                                rot_speed = (1.0 if horiz_error > 0 else -1.0) * _clamp(rot_magnitude, 0.0, 1.0) * MAX_ROT_SPEED
+                        # Drive control — trace: rotation only, follow: rotation + depth
+                        horiz_error = (match.cx - 0.5) / 0.5
+                        if abs(horiz_error) >= DEADZONE:
+                            rot_magnitude = (abs(horiz_error) - DEADZONE) / (1.0 - DEADZONE)
+                            rot_speed = (1.0 if horiz_error > 0 else -1.0) * _clamp(rot_magnitude, 0.0, 1.0) * MAX_ROT_SPEED
 
-                            # range control: prefer depth, fall back to area
+                        # range control (follow mode only): prefer depth, fall back to area
+                        if follow_mode:
                             depth_frame = frames.get("depth") if use_realsense else None
                             cur_depth = _sample_depth(depth_frame, match.cx, match.cy, match.w, match.h) if depth_frame is not None else 0
                             if target_depth > 0 and cur_depth > 0:
@@ -272,15 +272,15 @@ def _tracker_loop(backend, follow_mode):
                                     range_mag = (abs(area_error) - AREA_DEADZONE) / max(0.01, AREA_GAIN)
                                     vx = (1.0 if area_error > 0 else -1.0) * _clamp(range_mag, 0.0, 1.0)
 
-                            trans_speed = abs(vx) * MAX_RANGE_SPEED
-                            if abs(rot_speed) < 0.01 and abs(vx) < 0.01:
-                                if driving:
-                                    udp_sock.sendto(b"S", udp_dest)
-                                    driving = False
-                            else:
-                                pkt = b"D" + struct.pack("<ffff", vx, 0.0, trans_speed, rot_speed)
-                                udp_sock.sendto(pkt, udp_dest)
-                                driving = True
+                        trans_speed = abs(vx) * MAX_RANGE_SPEED
+                        if abs(rot_speed) < 0.01 and abs(vx) < 0.01:
+                            if driving:
+                                udp_sock.sendto(b"S", udp_dest)
+                                driving = False
+                        else:
+                            pkt = b"D" + struct.pack("<ffff", vx, 0.0, trans_speed, rot_speed)
+                            udp_sock.sendto(pkt, udp_dest)
+                            driving = True
 
                         status = "tracking"
                         with _lock:

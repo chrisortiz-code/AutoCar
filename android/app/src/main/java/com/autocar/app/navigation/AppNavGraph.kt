@@ -125,8 +125,8 @@ fun AppNavGraph(
     var faceBackend by remember { mutableStateOf("mediapipe") }
     var faceMode by remember { mutableStateOf("trace") }
     var trackBackend by remember { mutableStateOf("orb") }
-    var trackFollowMode by remember { mutableStateOf(true) }
-    var colorFollowMode by remember { mutableStateOf(true) }
+    var trackMode by remember { mutableStateOf("trace") }
+    var colorMode by remember { mutableStateOf("trace") }
     var pathsSelectedIndex by remember { mutableIntStateOf(0) }
 
     // Grid layout state (hoisted for gamepad access)
@@ -176,8 +176,8 @@ fun AppNavGraph(
         faceVm = faceVm,
         trackBackend = trackBackend,
         onTrackBackendChange = { trackBackend = it },
-        trackFollowMode = trackFollowMode,
-        onTrackFollowModeChange = { trackFollowMode = it },
+        trackMode = trackMode,
+        onTrackModeChange = { trackMode = it },
         trackVm = trackVm,
         driveVm = driveVm,
         pathsVm = pathsVm,
@@ -231,10 +231,10 @@ fun AppNavGraph(
                         onFaceModeChange = { faceMode = it },
                         trackBackend = trackBackend,
                         onTrackBackendChange = { trackBackend = it },
-                        trackFollowMode = trackFollowMode,
-                        onTrackFollowModeChange = { trackFollowMode = it },
-                        colorFollowMode = colorFollowMode,
-                        onColorFollowModeChange = { colorFollowMode = it },
+                        trackMode = trackMode,
+                        onTrackModeChange = { trackMode = it },
+                        colorMode = colorMode,
+                        onColorModeChange = { colorMode = it },
                         pathsSelectedIndex = pathsSelectedIndex,
                         gamepadConnected = gamepadConnected,
                         showChrome = showChrome,
@@ -258,10 +258,10 @@ fun AppNavGraph(
                         onFaceModeChange = { faceMode = it },
                         trackBackend = trackBackend,
                         onTrackBackendChange = { trackBackend = it },
-                        trackFollowMode = trackFollowMode,
-                        onTrackFollowModeChange = { trackFollowMode = it },
-                        colorFollowMode = colorFollowMode,
-                        onColorFollowModeChange = { colorFollowMode = it },
+                        trackMode = trackMode,
+                        onTrackModeChange = { trackMode = it },
+                        colorMode = colorMode,
+                        onColorModeChange = { colorMode = it },
                         pathsSelectedIndex = pathsSelectedIndex,
                         gamepadConnected = gamepadConnected,
                         showChrome = showChrome,
@@ -285,10 +285,10 @@ fun AppNavGraph(
                     onFaceModeChange = { faceMode = it },
                     trackBackend = trackBackend,
                     onTrackBackendChange = { trackBackend = it },
-                    trackFollowMode = trackFollowMode,
-                    onTrackFollowModeChange = { trackFollowMode = it },
-                    colorFollowMode = colorFollowMode,
-                    onColorFollowModeChange = { colorFollowMode = it },
+                    trackMode = trackMode,
+                    onTrackModeChange = { trackMode = it },
+                    colorMode = colorMode,
+                    onColorModeChange = { colorMode = it },
                     pathsSelectedIndex = pathsSelectedIndex,
                     gamepadConnected = gamepadConnected,
                     showChrome = showChrome,
@@ -372,10 +372,10 @@ private fun ColumnScope.TabletLandscapeLayout(
     onFaceModeChange: (String) -> Unit,
     trackBackend: String,
     onTrackBackendChange: (String) -> Unit,
-    trackFollowMode: Boolean,
-    onTrackFollowModeChange: (Boolean) -> Unit,
-    colorFollowMode: Boolean,
-    onColorFollowModeChange: (Boolean) -> Unit,
+    trackMode: String,
+    onTrackModeChange: (String) -> Unit,
+    colorMode: String,
+    onColorModeChange: (String) -> Unit,
     pathsSelectedIndex: Int,
     gamepadConnected: Boolean,
     showChrome: Boolean = true,
@@ -436,13 +436,13 @@ private fun ColumnScope.TabletLandscapeLayout(
                     trackVm = trackVm,
                     selectedBackend = trackBackend,
                     onBackendChange = onTrackBackendChange,
-                    followMode = trackFollowMode,
-                    onFollowModeChange = onTrackFollowModeChange,
+                    selectedMode = trackMode,
+                    onModeChange = onTrackModeChange,
                 )
                 Viewport.Color -> ColorViewport(
                     colorVm = colorVm,
-                    followMode = colorFollowMode,
-                    onFollowModeChange = onColorFollowModeChange,
+                    selectedMode = colorMode,
+                    onModeChange = onColorModeChange,
                 )
             }
         }
@@ -512,10 +512,10 @@ private fun ColumnScope.GridLayout(
     onFaceModeChange: (String) -> Unit,
     trackBackend: String,
     onTrackBackendChange: (String) -> Unit,
-    trackFollowMode: Boolean,
-    onTrackFollowModeChange: (Boolean) -> Unit,
-    colorFollowMode: Boolean,
-    onColorFollowModeChange: (Boolean) -> Unit,
+    trackMode: String,
+    onTrackModeChange: (String) -> Unit,
+    colorMode: String,
+    onColorModeChange: (String) -> Unit,
     pathsSelectedIndex: Int,
     gamepadConnected: Boolean,
     showChrome: Boolean = true,
@@ -651,15 +651,15 @@ private fun ColumnScope.GridLayout(
                     trackVm = trackVm,
                     selectedBackend = trackBackend,
                     onBackendChange = onTrackBackendChange,
-                    followMode = trackFollowMode,
-                    onFollowModeChange = onTrackFollowModeChange,
+                    selectedMode = trackMode,
+                    onModeChange = onTrackModeChange,
                 )
             }
             Viewport.Color -> Box(modifier = Modifier.weight(1f)) {
                 ColorViewport(
                     colorVm = colorVm,
-                    followMode = colorFollowMode,
-                    onFollowModeChange = onColorFollowModeChange,
+                    selectedMode = colorMode,
+                    onModeChange = onColorModeChange,
                 )
             }
 
@@ -791,10 +791,10 @@ private fun ColumnScope.PhoneLayout(
     onFaceModeChange: (String) -> Unit,
     trackBackend: String,
     onTrackBackendChange: (String) -> Unit,
-    trackFollowMode: Boolean,
-    onTrackFollowModeChange: (Boolean) -> Unit,
-    colorFollowMode: Boolean,
-    onColorFollowModeChange: (Boolean) -> Unit,
+    trackMode: String,
+    onTrackModeChange: (String) -> Unit,
+    colorMode: String,
+    onColorModeChange: (String) -> Unit,
     pathsSelectedIndex: Int,
     gamepadConnected: Boolean,
     showChrome: Boolean = true,
@@ -813,13 +813,13 @@ private fun ColumnScope.PhoneLayout(
                 trackVm = trackVm,
                 selectedBackend = trackBackend,
                 onBackendChange = onTrackBackendChange,
-                followMode = trackFollowMode,
-                onFollowModeChange = onTrackFollowModeChange,
+                selectedMode = trackMode,
+                onModeChange = onTrackModeChange,
             )
             NavTab.Color -> ColorViewport(
                 colorVm = colorVm,
-                followMode = colorFollowMode,
-                onFollowModeChange = onColorFollowModeChange,
+                selectedMode = colorMode,
+                onModeChange = onColorModeChange,
             )
             NavTab.Dashboard -> DashboardScreen()
             NavTab.Drive -> DriveScreen(gamepadManager = gamepadManager, driveVm = driveVm)

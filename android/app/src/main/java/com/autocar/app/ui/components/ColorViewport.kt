@@ -18,8 +18,6 @@ import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
-import androidx.compose.material3.Switch
-import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
@@ -35,6 +33,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.autocar.app.ui.theme.Gold
+import com.autocar.app.ui.theme.GoldDark
 import com.autocar.app.ui.theme.StatusGreen
 import com.autocar.app.ui.theme.StatusRed
 import com.autocar.app.ui.theme.StatusYellow
@@ -44,8 +43,8 @@ import com.autocar.app.viewmodel.ColorViewModel
 fun ColorViewport(
     colorVm: ColorViewModel = viewModel(),
     modifier: Modifier = Modifier,
-    followMode: Boolean = true,
-    onFollowModeChange: ((Boolean) -> Unit)? = null,
+    selectedMode: String = "trace",
+    onModeChange: ((String) -> Unit)? = null,
 ) {
     val colorState by colorVm.colorState.collectAsState()
     val streamUrl by colorVm.streamUrl.collectAsState()
@@ -55,9 +54,9 @@ fun ColorViewport(
         onDispose { colorVm.onTabHidden() }
     }
 
-    var localFollow by remember { mutableStateOf(followMode) }
-    val activeFollow = if (onFollowModeChange != null) followMode else localFollow
-    val setFollow: (Boolean) -> Unit = onFollowModeChange ?: { localFollow = it }
+    var localMode by remember { mutableStateOf(selectedMode) }
+    val activeMode = if (onModeChange != null) selectedMode else localMode
+    val setMode: (String) -> Unit = onModeChange ?: { localMode = it }
 
     val status = colorState.status
     val isIdle = status == "idle"
@@ -96,23 +95,16 @@ fun ColorViewport(
         }
 
         if (isIdle) {
-            // ── Follow mode toggle ──
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                Text("Follow mode", style = MaterialTheme.typography.labelLarge, color = Gold)
-                Switch(
-                    checked = activeFollow,
-                    onCheckedChange = setFollow,
-                    colors = SwitchDefaults.colors(checkedThumbColor = Gold),
-                )
+            // ── Mode selector ──
+            Text("Mode", style = MaterialTheme.typography.labelLarge, color = Gold)
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                ColorModeButton("Trace", activeMode == "trace") { setMode("trace") }
+                ColorModeButton("Follow", activeMode == "follow") { setMode("follow") }
             }
 
             // ── Start button ──
             Button(
-                onClick = { colorVm.start(follow = activeFollow) },
+                onClick = { colorVm.start(follow = activeMode == "follow") },
                 modifier = Modifier.fillMaxWidth(),
                 colors = ButtonDefaults.buttonColors(containerColor = Gold),
             ) {
@@ -258,6 +250,20 @@ private fun ColorStatusChip(status: String) {
             .padding(horizontal = 10.dp, vertical = 4.dp),
     ) {
         Text(label, color = color, style = MaterialTheme.typography.labelMedium)
+    }
+}
+
+@Composable
+private fun ColorModeButton(label: String, selected: Boolean, onClick: () -> Unit) {
+    OutlinedButton(
+        onClick = onClick,
+        colors = ButtonDefaults.outlinedButtonColors(
+            containerColor = if (selected) GoldDark.copy(alpha = 0.3f) else Color.Transparent,
+            contentColor = if (selected) Gold else MaterialTheme.colorScheme.onSurfaceVariant,
+        ),
+        border = ButtonDefaults.outlinedButtonBorder(selected),
+    ) {
+        Text(label)
     }
 }
 

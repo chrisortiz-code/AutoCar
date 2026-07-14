@@ -65,6 +65,11 @@ def _clamp(value, low, high):
     return max(low, min(high, value))
 
 
+def _draw_text(img, text, pos, color):
+    cv2.putText(img, text, pos, cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 0), 2, cv2.LINE_AA)
+    cv2.putText(img, text, pos, cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 1, cv2.LINE_AA)
+
+
 def _sample_depth(depth_frame, cx, cy, w, h):
     """Sample median-clustered depth (mm) from a normalized bounding box."""
     if depth_frame is None:
@@ -125,6 +130,8 @@ def _tracker_loop(backend, follow_mode):
     target_area = None
     target_depth = 0  # mm, captured at selection time (0 = not set)
     has_reference = False
+    frozen_until = 0.0  # timestamp — hold the frozen frame until this time
+    frozen_jpeg = None   # JPEG bytes of the frozen selection frame
 
     fps_count = 0
     fps_t0 = time.perf_counter()
@@ -160,6 +167,8 @@ def _tracker_loop(backend, follow_mode):
                 has_reference = False
                 target_area = None
                 target_depth = 0
+                frozen_jpeg = None
+                frozen_until = 0.0
                 if driving:
                     udp_sock.sendto(b"S", udp_dest)
                     driving = False
@@ -192,8 +201,25 @@ def _tracker_loop(backend, follow_mode):
                         nh = (py2 - py1) / fh
                         target_depth = _sample_depth(depth_frame, ncx, ncy, nw, nh)
                     has_reference = True
+                    # freeze the stream briefly to show what was selected
+                    snap = frame.copy()
+                    cv2.rectangle(snap, (px1, py1), (px2, py2), (0, 255, 255), 2)
+                    _draw_text(snap, "Reference set", (px1, max(py1 - 8, 14)), (0, 255, 255))
+                    _, fbuf = cv2.imencode(".jpg", snap, [cv2.IMWRITE_JPEG_QUALITY, 70])
+                    frozen_jpeg = fbuf.tobytes()
+                    frozen_until = time.time() + 1.0
                     with _lock:
                         _state["status"] = "tracking"
+                        _latest_jpeg = frozen_jpeg
+
+            # While frozen, keep outputting the frozen frame
+            if frozen_jpeg and time.time() < frozen_until:
+                with _lock:
+                    _latest_jpeg = frozen_jpeg
+                time.sleep(0.03)
+                continue
+
+            frozen_jpeg = None
 
             # Run matching if we have a reference
             display = frame.copy()

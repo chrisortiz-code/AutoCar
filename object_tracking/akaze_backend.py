@@ -19,6 +19,11 @@ class AKAZEMatcher(ObjectMatcher):
     name = "akaze"
 
     def __init__(self, min_confidence=0.15):
+        if not hasattr(cv2, "AKAZE_create"):
+            raise RuntimeError(
+                "cv2.AKAZE_create not available in this OpenCV build. "
+                "Use orb or sift backend instead."
+            )
         self._akaze = cv2.AKAZE_create()
         self._bf = cv2.BFMatcher(cv2.NORM_HAMMING, crossCheck=False)
         self._min_confidence = min_confidence

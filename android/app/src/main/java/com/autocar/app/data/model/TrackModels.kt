@@ -5,6 +5,7 @@ import kotlinx.serialization.Serializable
 @Serializable
 data class TrackState(
     val status: String = "idle",
+    val status_msg: String = "",
     val confidence: Float = 0f,
     val rot_speed: Float = 0f,
     val vx: Float = 0f,

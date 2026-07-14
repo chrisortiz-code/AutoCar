@@ -1,0 +1,11 @@
+# Model weights are downloaded at runtime — don't commit them
+*.pt
+*.onnx
+*.engine
+*.tflite
+*.pth
+*.bin
+
+# InsightFace model packs
+buffalo_sc/
+buffalo_l/

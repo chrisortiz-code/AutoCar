@@ -16,6 +16,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.FilterChipDefaults
 import androidx.compose.material3.MaterialTheme
@@ -46,6 +47,10 @@ import com.autocar.app.viewmodel.FaceViewModel
 fun FaceViewport(
     faceVm: FaceViewModel = viewModel(),
     modifier: Modifier = Modifier,
+    selectedBackend: String = "mediapipe",
+    onBackendChange: ((String) -> Unit)? = null,
+    selectedMode: String = "trace",
+    onModeChange: ((String) -> Unit)? = null,
 ) {
     val faceState by faceVm.faceState.collectAsState()
     val streamUrl by faceVm.streamUrl.collectAsState()
@@ -56,11 +61,17 @@ fun FaceViewport(
         onDispose { faceVm.onTabHidden() }
     }
 
-    var selectedMode by remember { mutableStateOf("trace") }
-    var selectedBackend by remember { mutableStateOf("mediapipe") }
+    // Use hoisted state if callbacks provided, otherwise fall back to local state
+    var localMode by remember { mutableStateOf(selectedMode) }
+    var localBackend by remember { mutableStateOf(selectedBackend) }
+    val activeMode = if (onModeChange != null) selectedMode else localMode
+    val activeBackend = if (onBackendChange != null) selectedBackend else localBackend
+    val setMode: (String) -> Unit = onModeChange ?: { localMode = it }
+    val setBackend: (String) -> Unit = onBackendChange ?: { localBackend = it }
 
     val status = faceState.status
     val isIdle = status == "idle"
+    val isLoading = status == "loading"
     val isSelecting = status == "selecting"
     val isConfirming = status == "confirming"
 
@@ -98,8 +109,8 @@ fun FaceViewport(
             // ── Mode selector ──
             Text("Mode", style = MaterialTheme.typography.labelLarge, color = Gold)
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                ModeButton("Trace", selectedMode == "trace") { selectedMode = "trace" }
-                ModeButton("Follow", selectedMode == "follow") { selectedMode = "follow" }
+                ModeButton("Trace", activeMode == "trace") { setMode("trace") }
+                ModeButton("Follow", activeMode == "follow") { setMode("follow") }
             }
 
             // ── Backend selector ──
@@ -108,8 +119,8 @@ fun FaceViewport(
             FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 backends.forEach { backend ->
                     FilterChip(
-                        selected = selectedBackend == backend,
-                        onClick = { selectedBackend = backend },
+                        selected = activeBackend == backend,
+                        onClick = { setBackend(backend) },
                         label = { Text(backend) },
                         colors = FilterChipDefaults.filterChipColors(
                             selectedContainerColor = GoldDark.copy(alpha = 0.3f),
@@ -123,14 +134,37 @@ fun FaceViewport(
             Button(
                 onClick = {
                     faceVm.start(
-                        backend = selectedBackend,
-                        follow = selectedMode == "follow",
+                        backend = activeBackend,
+                        follow = activeMode == "follow",
                     )
                 },
                 modifier = Modifier.fillMaxWidth(),
                 colors = ButtonDefaults.buttonColors(containerColor = Gold),
             ) {
                 Text("Start", fontWeight = FontWeight.Bold, color = Color.Black)
+            }
+        } else if (isLoading) {
+            // ── Loading state ──
+            Column(
+                modifier = Modifier.fillMaxWidth().padding(vertical = 32.dp),
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.spacedBy(16.dp),
+            ) {
+                CircularProgressIndicator(color = Gold)
+                Text(
+                    text = faceState.status_msg.ifEmpty { "Loading..." },
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = Gold,
+                )
+            }
+
+            // Stop button during loading
+            Button(
+                onClick = { faceVm.stop() },
+                modifier = Modifier.fillMaxWidth(),
+                colors = ButtonDefaults.buttonColors(containerColor = StatusRed),
+            ) {
+                Text("Cancel", fontWeight = FontWeight.Bold, color = Color.White)
             }
         } else {
             // ── Active states: stream + controls ──
@@ -226,6 +260,7 @@ fun FaceViewport(
 private fun StatusChip(status: String) {
     val (color, label) = when (status) {
         "idle" -> Pair(MaterialTheme.colorScheme.onSurfaceVariant, "Idle")
+        "loading" -> Pair(StatusYellow, "Loading")
         "tracing" -> Pair(StatusGreen, "Tracing")
         "selecting" -> Pair(StatusYellow, "Selecting")
         "confirming" -> Pair(Gold, "Confirm?")

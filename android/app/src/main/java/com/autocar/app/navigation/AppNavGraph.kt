@@ -1,6 +1,9 @@
 package com.autocar.app.navigation
 
 import android.content.res.Configuration
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.gestures.detectTapGestures
@@ -23,6 +26,7 @@ import androidx.compose.material.icons.filled.Gamepad
 import androidx.compose.material.icons.filled.Route
 import androidx.compose.material.icons.filled.CenterFocusStrong
 import androidx.compose.material.icons.filled.Sensors
+import androidx.compose.material.icons.filled.SportsEsports
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -42,6 +46,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -57,6 +62,8 @@ import androidx.compose.ui.unit.sp
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.autocar.app.data.gamepad.GamepadManager
 import com.autocar.app.ui.components.FaceViewport
+import com.autocar.app.ui.components.GamepadControlsButton
+import com.autocar.app.ui.components.GamepadNavEffect
 import com.autocar.app.ui.components.LidarPolarPlot
 import com.autocar.app.ui.components.MjpegView
 import com.autocar.app.ui.components.ObjectTrackViewport
@@ -69,8 +76,13 @@ import com.autocar.app.ui.theme.Gold
 import com.autocar.app.ui.theme.GoldDark
 import com.autocar.app.ui.theme.Rajdhani
 import com.autocar.app.ui.theme.SurfaceDark
+import kotlinx.coroutines.delay
+import com.autocar.app.viewmodel.DriveViewModel
+import com.autocar.app.viewmodel.FaceViewModel
+import com.autocar.app.viewmodel.PathsViewModel
 import com.autocar.app.viewmodel.SensorsViewModel
 import com.autocar.app.viewmodel.SettingsViewModel
+import com.autocar.app.viewmodel.TrackViewModel
 
 enum class NavTab(val label: String, val icon: ImageVector) {
     Sensors("Sensors", Icons.Default.Sensors),
@@ -92,30 +104,203 @@ private enum class Viewport(val label: String, val icon: ImageVector) {
 private val railTabs = listOf(NavTab.Dashboard, NavTab.Drive, NavTab.Paths)
 
 @Composable
-fun AppNavGraph(gamepadManager: GamepadManager) {
+fun AppNavGraph(
+    gamepadManager: GamepadManager,
+    scaleLevel: Int = 0,
+    onScaleCycle: () -> Unit = {},
+) {
     val config = LocalConfiguration.current
     val useRail = config.screenWidthDp >= 600 &&
         config.orientation == Configuration.ORIENTATION_LANDSCAPE
     val settingsVm: SettingsViewModel = viewModel()
     val layoutMode by settingsVm.layoutMode.collectAsState()
 
-    Column(modifier = Modifier.fillMaxSize()) {
-        TopBar()
+    // Hoisted state for gamepad navigation
+    var selectedTab by remember { mutableStateOf(NavTab.Sensors) }
+    var faceBackend by remember { mutableStateOf("mediapipe") }
+    var faceMode by remember { mutableStateOf("trace") }
+    var trackBackend by remember { mutableStateOf("orb") }
+    var trackFollowMode by remember { mutableStateOf(true) }
+    var pathsSelectedIndex by remember { mutableIntStateOf(0) }
 
-        if (useRail) {
-            if (layoutMode == "grid") {
-                GridLayout(gamepadManager)
+    // Grid layout state (hoisted for gamepad access)
+    var gridExpandedCell by remember { mutableStateOf<GridCell?>(null) }
+    var gridPanelTab by remember { mutableIntStateOf(0) }
+
+    // Classic tablet layout state (hoisted for gamepad access)
+    var classicActiveTab by remember { mutableStateOf<NavTab?>(null) }
+
+    // Auto-hide chrome at scale level 5 (index 4)
+    var chromeVisible by remember { mutableStateOf(true) }
+    var lastButtonPress by remember { mutableLongStateOf(System.currentTimeMillis()) }
+
+    LaunchedEffect(lastButtonPress) {
+        if (scaleLevel >= 4) { // level 5 = index 4
+            chromeVisible = true
+            delay(3000)
+            chromeVisible = false
+        }
+    }
+
+    // Reset chrome visibility when leaving scale level 5
+    LaunchedEffect(scaleLevel) {
+        if (scaleLevel < 4) chromeVisible = true
+    }
+
+    // ViewModels shared with GamepadNavEffect
+    val faceVm: FaceViewModel = viewModel()
+    val trackVm: TrackViewModel = viewModel()
+    val driveVm: DriveViewModel = viewModel()
+    val pathsVm: PathsViewModel = viewModel()
+
+    val gamepadState by gamepadManager.state.collectAsState()
+    val gamepadConnected = gamepadState.connected
+    val pathsList by pathsVm.paths.collectAsState()
+
+    // Gamepad navigation effect — only fires when controller is connected
+    GamepadNavEffect(
+        gamepadManager = gamepadManager,
+        currentTab = selectedTab,
+        onTabChange = { selectedTab = it },
+        faceBackend = faceBackend,
+        onFaceBackendChange = { faceBackend = it },
+        faceMode = faceMode,
+        onFaceModeChange = { faceMode = it },
+        faceVm = faceVm,
+        trackBackend = trackBackend,
+        onTrackBackendChange = { trackBackend = it },
+        trackFollowMode = trackFollowMode,
+        onTrackFollowModeChange = { trackFollowMode = it },
+        trackVm = trackVm,
+        driveVm = driveVm,
+        pathsVm = pathsVm,
+        pathsSelectedIndex = pathsSelectedIndex,
+        onPathsSelectedIndexChange = { pathsSelectedIndex = it },
+        pathsCount = pathsList.size,
+        onScaleCycle = onScaleCycle,
+        onAnyButtonPress = { lastButtonPress = System.currentTimeMillis() },
+        onSensorsGridNav = if (useRail && layoutMode == "grid") { delta ->
+            val cells = GridCell.entries
+            val curIdx = gridExpandedCell?.let { cells.indexOf(it) } ?: -1
+            gridExpandedCell = if (delta > 0) {
+                cells[(curIdx + 1) % cells.size]
             } else {
-                TabletLandscapeLayout(gamepadManager)
+                cells[if (curIdx <= 0) cells.lastIndex else curIdx - 1]
             }
-        } else {
-            PhoneLayout(gamepadManager)
+        } else null,
+        onSensorsPanelCycle = if (useRail) { delta ->
+            if (layoutMode == "grid") {
+                val count = 3 // Dashboard, Drive, Paths
+                gridPanelTab = (gridPanelTab + delta + count) % count
+            } else {
+                val idx = railTabs.indexOf(classicActiveTab ?: railTabs[0])
+                val newIdx = (idx + delta + railTabs.size) % railTabs.size
+                classicActiveTab = railTabs[newIdx]
+            }
+        } else null,
+    )
+
+    val showChrome = chromeVisible || scaleLevel < 4
+
+    Box(modifier = Modifier.fillMaxSize()) {
+        Column(modifier = Modifier.fillMaxSize()) {
+            AnimatedVisibility(visible = showChrome, enter = fadeIn(), exit = fadeOut()) {
+                TopBar(gamepadConnected)
+            }
+
+            if (useRail) {
+                if (layoutMode == "grid") {
+                    GridLayout(
+                        gamepadManager = gamepadManager,
+                        selectedTab = selectedTab,
+                        faceVm = faceVm,
+                        trackVm = trackVm,
+                        driveVm = driveVm,
+                        pathsVm = pathsVm,
+                        faceBackend = faceBackend,
+                        onFaceBackendChange = { faceBackend = it },
+                        faceMode = faceMode,
+                        onFaceModeChange = { faceMode = it },
+                        trackBackend = trackBackend,
+                        onTrackBackendChange = { trackBackend = it },
+                        trackFollowMode = trackFollowMode,
+                        onTrackFollowModeChange = { trackFollowMode = it },
+                        pathsSelectedIndex = pathsSelectedIndex,
+                        gamepadConnected = gamepadConnected,
+                        showChrome = showChrome,
+                        expandedCell = gridExpandedCell,
+                        onExpandedCellChange = { gridExpandedCell = it },
+                        panelTab = gridPanelTab,
+                        onPanelTabChange = { gridPanelTab = it },
+                    )
+                } else {
+                    TabletLandscapeLayout(
+                        gamepadManager = gamepadManager,
+                        selectedTab = selectedTab,
+                        faceVm = faceVm,
+                        trackVm = trackVm,
+                        driveVm = driveVm,
+                        pathsVm = pathsVm,
+                        faceBackend = faceBackend,
+                        onFaceBackendChange = { faceBackend = it },
+                        faceMode = faceMode,
+                        onFaceModeChange = { faceMode = it },
+                        trackBackend = trackBackend,
+                        onTrackBackendChange = { trackBackend = it },
+                        trackFollowMode = trackFollowMode,
+                        onTrackFollowModeChange = { trackFollowMode = it },
+                        pathsSelectedIndex = pathsSelectedIndex,
+                        gamepadConnected = gamepadConnected,
+                        showChrome = showChrome,
+                        activeTab = classicActiveTab,
+                        onActiveTabChange = { classicActiveTab = it },
+                    )
+                }
+            } else {
+                PhoneLayout(
+                    gamepadManager = gamepadManager,
+                    selectedTab = selectedTab,
+                    onTabChange = { selectedTab = it },
+                    faceVm = faceVm,
+                    trackVm = trackVm,
+                    driveVm = driveVm,
+                    pathsVm = pathsVm,
+                    faceBackend = faceBackend,
+                    onFaceBackendChange = { faceBackend = it },
+                    faceMode = faceMode,
+                    onFaceModeChange = { faceMode = it },
+                    trackBackend = trackBackend,
+                    onTrackBackendChange = { trackBackend = it },
+                    trackFollowMode = trackFollowMode,
+                    onTrackFollowModeChange = { trackFollowMode = it },
+                    pathsSelectedIndex = pathsSelectedIndex,
+                    gamepadConnected = gamepadConnected,
+                    showChrome = showChrome,
+                )
+            }
+        }
+
+        // Gamepad controls info — bottom-left, visible when connected + chrome shown
+        if (gamepadConnected) {
+            AnimatedVisibility(
+                visible = showChrome,
+                enter = fadeIn(),
+                exit = fadeOut(),
+                modifier = Modifier
+                    .align(Alignment.BottomStart)
+                    .padding(
+                        start = if (useRail) 92.dp else 12.dp,
+                        bottom = if (useRail) 12.dp else 92.dp,
+                    ),
+            ) {
+                GamepadControlsButton(currentTab = selectedTab)
+            }
         }
     }
 }
 
 @Composable
-private fun TopBar() {
+private fun TopBar(gamepadConnected: Boolean) {
     Box(
         modifier = Modifier
             .fillMaxWidth()
@@ -127,44 +312,92 @@ private fun TopBar() {
             ),
         contentAlignment = Alignment.CenterStart,
     ) {
-        Text(
-            text = "AUTOCAR",
-            fontFamily = Rajdhani,
-            fontWeight = FontWeight.Bold,
-            fontSize = 22.sp,
-            color = SurfaceDark,
-            letterSpacing = 3.sp,
-            modifier = Modifier.padding(horizontal = 16.dp),
-        )
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 16.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text(
+                text = "AUTOCAR",
+                fontFamily = Rajdhani,
+                fontWeight = FontWeight.Bold,
+                fontSize = 22.sp,
+                color = SurfaceDark,
+                letterSpacing = 3.sp,
+                modifier = Modifier.weight(1f),
+            )
+            if (gamepadConnected) {
+                Icon(
+                    Icons.Default.SportsEsports,
+                    contentDescription = "Gamepad connected",
+                    tint = SurfaceDark,
+                    modifier = Modifier.size(20.dp),
+                )
+            }
+        }
     }
 }
 
 // ── Tablet landscape: left rail (viewport) + viewport + side panel + right rail ──
 
 @Composable
-private fun ColumnScope.TabletLandscapeLayout(gamepadManager: GamepadManager) {
-    var activeTab by remember { mutableStateOf<NavTab?>(null) }
+private fun ColumnScope.TabletLandscapeLayout(
+    gamepadManager: GamepadManager,
+    selectedTab: NavTab,
+    faceVm: FaceViewModel,
+    trackVm: TrackViewModel,
+    driveVm: DriveViewModel,
+    pathsVm: PathsViewModel,
+    faceBackend: String,
+    onFaceBackendChange: (String) -> Unit,
+    faceMode: String,
+    onFaceModeChange: (String) -> Unit,
+    trackBackend: String,
+    onTrackBackendChange: (String) -> Unit,
+    trackFollowMode: Boolean,
+    onTrackFollowModeChange: (Boolean) -> Unit,
+    pathsSelectedIndex: Int,
+    gamepadConnected: Boolean,
+    showChrome: Boolean = true,
+    activeTab: NavTab?,
+    onActiveTabChange: (NavTab?) -> Unit,
+) {
     var viewport by remember { mutableStateOf(Viewport.Sensors) }
+
+    // Sync gamepad tab selection to tablet viewport/panel
+    LaunchedEffect(selectedTab) {
+        when (selectedTab) {
+            NavTab.Sensors -> { viewport = Viewport.Sensors; onActiveTabChange(null) }
+            NavTab.Face -> { viewport = Viewport.Face; onActiveTabChange(null) }
+            NavTab.Track -> { viewport = Viewport.Track; onActiveTabChange(null) }
+            NavTab.Dashboard -> onActiveTabChange(NavTab.Dashboard)
+            NavTab.Drive -> onActiveTabChange(NavTab.Drive)
+            NavTab.Paths -> onActiveTabChange(NavTab.Paths)
+        }
+    }
 
     Row(modifier = Modifier.weight(1f)) {
         // Left rail — viewport selector
-        NavigationRail(
-            containerColor = MaterialTheme.colorScheme.surface,
-        ) {
-            Viewport.entries.forEach { vp ->
-                NavigationRailItem(
-                    icon = { Icon(vp.icon, contentDescription = vp.label) },
-                    label = { Text(vp.label) },
-                    selected = viewport == vp,
-                    onClick = { viewport = vp },
-                    colors = NavigationRailItemDefaults.colors(
-                        selectedIconColor = Gold,
-                        selectedTextColor = Gold,
-                        indicatorColor = GoldDark.copy(alpha = 0.25f),
-                        unselectedIconColor = MaterialTheme.colorScheme.onSurfaceVariant,
-                        unselectedTextColor = MaterialTheme.colorScheme.onSurfaceVariant,
-                    ),
-                )
+        AnimatedVisibility(visible = showChrome, enter = fadeIn(), exit = fadeOut()) {
+            NavigationRail(
+                containerColor = MaterialTheme.colorScheme.surface,
+            ) {
+                Viewport.entries.forEach { vp ->
+                    NavigationRailItem(
+                        icon = { Icon(vp.icon, contentDescription = vp.label) },
+                        label = { Text(vp.label) },
+                        selected = viewport == vp,
+                        onClick = { viewport = vp },
+                        colors = NavigationRailItemDefaults.colors(
+                            selectedIconColor = Gold,
+                            selectedTextColor = Gold,
+                            indicatorColor = GoldDark.copy(alpha = 0.25f),
+                            unselectedIconColor = MaterialTheme.colorScheme.onSurfaceVariant,
+                            unselectedTextColor = MaterialTheme.colorScheme.onSurfaceVariant,
+                        ),
+                    )
+                }
             }
         }
 
@@ -172,8 +405,20 @@ private fun ColumnScope.TabletLandscapeLayout(gamepadManager: GamepadManager) {
         Box(modifier = Modifier.weight(1f)) {
             when (viewport) {
                 Viewport.Sensors -> SensorViewport()
-                Viewport.Face -> FaceViewport()
-                Viewport.Track -> ObjectTrackViewport()
+                Viewport.Face -> FaceViewport(
+                    faceVm = faceVm,
+                    selectedBackend = faceBackend,
+                    onBackendChange = onFaceBackendChange,
+                    selectedMode = faceMode,
+                    onModeChange = onFaceModeChange,
+                )
+                Viewport.Track -> ObjectTrackViewport(
+                    trackVm = trackVm,
+                    selectedBackend = trackBackend,
+                    onBackendChange = onTrackBackendChange,
+                    followMode = trackFollowMode,
+                    onFollowModeChange = onTrackFollowModeChange,
+                )
             }
         }
 
@@ -181,36 +426,42 @@ private fun ColumnScope.TabletLandscapeLayout(gamepadManager: GamepadManager) {
         SidePanel(
             visible = activeTab != null,
             title = activeTab?.label ?: "",
-            onClose = { activeTab = null },
+            onClose = { onActiveTabChange(null) },
         ) {
             when (activeTab) {
                 NavTab.Dashboard -> DashboardScreen()
-                NavTab.Drive -> DriveScreen(gamepadManager = gamepadManager)
-                NavTab.Paths -> PathsScreen()
+                NavTab.Drive -> DriveScreen(gamepadManager = gamepadManager, driveVm = driveVm)
+                NavTab.Paths -> PathsScreen(
+                    pathsVm = pathsVm,
+                    selectedIndex = pathsSelectedIndex,
+                    gamepadConnected = gamepadConnected,
+                )
                 else -> {}
             }
         }
 
         // Right rail — side panel tabs
-        NavigationRail(
-            containerColor = MaterialTheme.colorScheme.surface,
-        ) {
-            railTabs.forEach { tab ->
-                NavigationRailItem(
-                    icon = { Icon(tab.icon, contentDescription = tab.label) },
-                    label = { Text(tab.label) },
-                    selected = activeTab == tab,
-                    onClick = {
-                        activeTab = if (activeTab == tab) null else tab
-                    },
-                    colors = NavigationRailItemDefaults.colors(
-                        selectedIconColor = Gold,
-                        selectedTextColor = Gold,
-                        indicatorColor = GoldDark.copy(alpha = 0.25f),
-                        unselectedIconColor = MaterialTheme.colorScheme.onSurfaceVariant,
-                        unselectedTextColor = MaterialTheme.colorScheme.onSurfaceVariant,
-                    ),
-                )
+        AnimatedVisibility(visible = showChrome, enter = fadeIn(), exit = fadeOut()) {
+            NavigationRail(
+                containerColor = MaterialTheme.colorScheme.surface,
+            ) {
+                railTabs.forEach { tab ->
+                    NavigationRailItem(
+                        icon = { Icon(tab.icon, contentDescription = tab.label) },
+                        label = { Text(tab.label) },
+                        selected = activeTab == tab,
+                        onClick = {
+                            onActiveTabChange(if (activeTab == tab) null else tab)
+                        },
+                        colors = NavigationRailItemDefaults.colors(
+                            selectedIconColor = Gold,
+                            selectedTextColor = Gold,
+                            indicatorColor = GoldDark.copy(alpha = 0.25f),
+                            unselectedIconColor = MaterialTheme.colorScheme.onSurfaceVariant,
+                            unselectedTextColor = MaterialTheme.colorScheme.onSurfaceVariant,
+                        ),
+                    )
+                }
             }
         }
     }
@@ -222,7 +473,29 @@ private fun ColumnScope.TabletLandscapeLayout(gamepadManager: GamepadManager) {
 private enum class GridCell { Camera, Depth, Lidar, Panel }
 
 @Composable
-private fun ColumnScope.GridLayout(gamepadManager: GamepadManager) {
+private fun ColumnScope.GridLayout(
+    gamepadManager: GamepadManager,
+    selectedTab: NavTab,
+    faceVm: FaceViewModel,
+    trackVm: TrackViewModel,
+    driveVm: DriveViewModel,
+    pathsVm: PathsViewModel,
+    faceBackend: String,
+    onFaceBackendChange: (String) -> Unit,
+    faceMode: String,
+    onFaceModeChange: (String) -> Unit,
+    trackBackend: String,
+    onTrackBackendChange: (String) -> Unit,
+    trackFollowMode: Boolean,
+    onTrackFollowModeChange: (Boolean) -> Unit,
+    pathsSelectedIndex: Int,
+    gamepadConnected: Boolean,
+    showChrome: Boolean = true,
+    expandedCell: GridCell?,
+    onExpandedCellChange: (GridCell?) -> Unit,
+    panelTab: Int,
+    onPanelTabChange: (Int) -> Unit,
+) {
     val sensorsVm: SensorsViewModel = viewModel()
     val sensorUpdate by sensorsVm.sensorUpdate.collectAsState()
     val cameraUrl by sensorsVm.cameraUrl.collectAsState()
@@ -231,32 +504,44 @@ private fun ColumnScope.GridLayout(gamepadManager: GamepadManager) {
     LaunchedEffect(Unit) { sensorsVm.connect() }
 
     var viewport by remember { mutableStateOf(Viewport.Sensors) }
-    var expandedCell by remember { mutableStateOf<GridCell?>(null) }
-    var panelTab by remember { mutableIntStateOf(0) }
     val panelTabs = listOf("Dashboard", "Drive", "Paths")
+
+    // Sync gamepad tab selection to grid viewport/panel
+    LaunchedEffect(selectedTab) {
+        when (selectedTab) {
+            NavTab.Sensors -> { viewport = Viewport.Sensors; onExpandedCellChange(null) }
+            NavTab.Face -> { viewport = Viewport.Face; onExpandedCellChange(null) }
+            NavTab.Track -> { viewport = Viewport.Track; onExpandedCellChange(null) }
+            NavTab.Dashboard -> { onExpandedCellChange(GridCell.Panel); onPanelTabChange(0) }
+            NavTab.Drive -> { onExpandedCellChange(GridCell.Panel); onPanelTabChange(1) }
+            NavTab.Paths -> { onExpandedCellChange(GridCell.Panel); onPanelTabChange(2) }
+        }
+    }
 
     Row(modifier = Modifier.weight(1f)) {
         // Left rail — viewport selector (same as classic)
-        NavigationRail(
-            containerColor = MaterialTheme.colorScheme.surface,
-        ) {
-            Viewport.entries.forEach { vp ->
-                NavigationRailItem(
-                    icon = { Icon(vp.icon, contentDescription = vp.label) },
-                    label = { Text(vp.label) },
-                    selected = viewport == vp && expandedCell == null,
-                    onClick = {
-                        viewport = vp
-                        expandedCell = null
-                    },
-                    colors = NavigationRailItemDefaults.colors(
-                        selectedIconColor = Gold,
-                        selectedTextColor = Gold,
-                        indicatorColor = GoldDark.copy(alpha = 0.25f),
-                        unselectedIconColor = MaterialTheme.colorScheme.onSurfaceVariant,
-                        unselectedTextColor = MaterialTheme.colorScheme.onSurfaceVariant,
-                    ),
-                )
+        AnimatedVisibility(visible = showChrome, enter = fadeIn(), exit = fadeOut()) {
+            NavigationRail(
+                containerColor = MaterialTheme.colorScheme.surface,
+            ) {
+                Viewport.entries.forEach { vp ->
+                    NavigationRailItem(
+                        icon = { Icon(vp.icon, contentDescription = vp.label) },
+                        label = { Text(vp.label) },
+                        selected = viewport == vp && expandedCell == null,
+                        onClick = {
+                            viewport = vp
+                            onExpandedCellChange(null)
+                        },
+                        colors = NavigationRailItemDefaults.colors(
+                            selectedIconColor = Gold,
+                            selectedTextColor = Gold,
+                            indicatorColor = GoldDark.copy(alpha = 0.25f),
+                            unselectedIconColor = MaterialTheme.colorScheme.onSurfaceVariant,
+                            unselectedTextColor = MaterialTheme.colorScheme.onSurfaceVariant,
+                        ),
+                    )
+                }
             }
         }
 
@@ -285,7 +570,7 @@ private fun ColumnScope.GridLayout(gamepadManager: GamepadManager) {
                             panelTabs.forEachIndexed { i, title ->
                                 Tab(
                                     selected = panelTab == i,
-                                    onClick = { panelTab = i },
+                                    onClick = { onPanelTabChange(i) },
                                     text = { Text(title) },
                                     selectedContentColor = Gold,
                                     unselectedContentColor = MaterialTheme.colorScheme.onSurfaceVariant,
@@ -295,8 +580,12 @@ private fun ColumnScope.GridLayout(gamepadManager: GamepadManager) {
                         Box(Modifier.weight(1f)) {
                             when (panelTab) {
                                 0 -> DashboardScreen()
-                                1 -> DriveScreen(gamepadManager = gamepadManager)
-                                2 -> PathsScreen()
+                                1 -> DriveScreen(gamepadManager = gamepadManager, driveVm = driveVm)
+                                2 -> PathsScreen(
+                                    pathsVm = pathsVm,
+                                    selectedIndex = pathsSelectedIndex,
+                                    gamepadConnected = gamepadConnected,
+                                )
                             }
                         }
                     }
@@ -304,7 +593,7 @@ private fun ColumnScope.GridLayout(gamepadManager: GamepadManager) {
                 }
                 // Close button overlay
                 IconButton(
-                    onClick = { expandedCell = null },
+                    onClick = { onExpandedCellChange(null) },
                     modifier = Modifier
                         .align(Alignment.TopEnd)
                         .padding(8.dp)
@@ -319,8 +608,24 @@ private fun ColumnScope.GridLayout(gamepadManager: GamepadManager) {
             }
         } else when (viewport) {
             // Face / Track — full viewport like classic layout
-            Viewport.Face -> Box(modifier = Modifier.weight(1f)) { FaceViewport() }
-            Viewport.Track -> Box(modifier = Modifier.weight(1f)) { ObjectTrackViewport() }
+            Viewport.Face -> Box(modifier = Modifier.weight(1f)) {
+                FaceViewport(
+                    faceVm = faceVm,
+                    selectedBackend = faceBackend,
+                    onBackendChange = onFaceBackendChange,
+                    selectedMode = faceMode,
+                    onModeChange = onFaceModeChange,
+                )
+            }
+            Viewport.Track -> Box(modifier = Modifier.weight(1f)) {
+                ObjectTrackViewport(
+                    trackVm = trackVm,
+                    selectedBackend = trackBackend,
+                    onBackendChange = onTrackBackendChange,
+                    followMode = trackFollowMode,
+                    onFollowModeChange = onTrackFollowModeChange,
+                )
+            }
 
             // Sensors — 2x2 grid with hold-to-enlarge
             Viewport.Sensors -> {
@@ -339,7 +644,7 @@ private fun ColumnScope.GridLayout(gamepadManager: GamepadManager) {
                             .fillMaxWidth()
                             .border(0.5.dp, MaterialTheme.colorScheme.outlineVariant)
                             .pointerInput(Unit) {
-                                detectTapGestures(onLongPress = { expandedCell = GridCell.Camera })
+                                detectTapGestures(onLongPress = { onExpandedCellChange(GridCell.Camera) })
                             },
                     ) {
                         MjpegView(url = cameraUrl, modifier = Modifier.fillMaxSize())
@@ -351,7 +656,7 @@ private fun ColumnScope.GridLayout(gamepadManager: GamepadManager) {
                             .fillMaxWidth()
                             .border(0.5.dp, MaterialTheme.colorScheme.outlineVariant)
                             .pointerInput(Unit) {
-                                detectTapGestures(onLongPress = { expandedCell = GridCell.Depth })
+                                detectTapGestures(onLongPress = { onExpandedCellChange(GridCell.Depth) })
                             },
                     ) {
                         MjpegView(url = depthUrl, modifier = Modifier.fillMaxSize())
@@ -371,7 +676,7 @@ private fun ColumnScope.GridLayout(gamepadManager: GamepadManager) {
                             .clipToBounds()
                             .border(0.5.dp, MaterialTheme.colorScheme.outlineVariant)
                             .pointerInput(Unit) {
-                                detectTapGestures(onLongPress = { expandedCell = GridCell.Lidar })
+                                detectTapGestures(onLongPress = { onExpandedCellChange(GridCell.Lidar) })
                             },
                         contentAlignment = Alignment.Center,
                     ) {
@@ -387,7 +692,7 @@ private fun ColumnScope.GridLayout(gamepadManager: GamepadManager) {
                             .fillMaxWidth()
                             .border(0.5.dp, MaterialTheme.colorScheme.outlineVariant)
                             .pointerInput(Unit) {
-                                detectTapGestures(onLongPress = { expandedCell = GridCell.Panel })
+                                detectTapGestures(onLongPress = { onExpandedCellChange(GridCell.Panel) })
                             },
                     ) {
                         Column(Modifier.fillMaxSize()) {
@@ -405,7 +710,7 @@ private fun ColumnScope.GridLayout(gamepadManager: GamepadManager) {
                                 panelTabs.forEachIndexed { i, title ->
                                     Tab(
                                         selected = panelTab == i,
-                                        onClick = { panelTab = i },
+                                        onClick = { onPanelTabChange(i) },
                                         text = { Text(title) },
                                         selectedContentColor = Gold,
                                         unselectedContentColor = MaterialTheme.colorScheme.onSurfaceVariant,
@@ -415,8 +720,12 @@ private fun ColumnScope.GridLayout(gamepadManager: GamepadManager) {
                             Box(Modifier.weight(1f)) {
                                 when (panelTab) {
                                     0 -> DashboardScreen()
-                                    1 -> DriveScreen(gamepadManager = gamepadManager)
-                                    2 -> PathsScreen()
+                                    1 -> DriveScreen(gamepadManager = gamepadManager, driveVm = driveVm)
+                                    2 -> PathsScreen(
+                                        pathsVm = pathsVm,
+                                        selectedIndex = pathsSelectedIndex,
+                                        gamepadConnected = gamepadConnected,
+                                    )
                                 }
                             }
                         }
@@ -431,37 +740,73 @@ private fun ColumnScope.GridLayout(gamepadManager: GamepadManager) {
 // ── Phone / tablet portrait: bottom nav with full-screen tabs ──
 
 @Composable
-private fun ColumnScope.PhoneLayout(gamepadManager: GamepadManager) {
-    var selectedTab by remember { mutableStateOf(NavTab.Sensors) }
-
+private fun ColumnScope.PhoneLayout(
+    gamepadManager: GamepadManager,
+    selectedTab: NavTab,
+    onTabChange: (NavTab) -> Unit,
+    faceVm: FaceViewModel,
+    trackVm: TrackViewModel,
+    driveVm: DriveViewModel,
+    pathsVm: PathsViewModel,
+    faceBackend: String,
+    onFaceBackendChange: (String) -> Unit,
+    faceMode: String,
+    onFaceModeChange: (String) -> Unit,
+    trackBackend: String,
+    onTrackBackendChange: (String) -> Unit,
+    trackFollowMode: Boolean,
+    onTrackFollowModeChange: (Boolean) -> Unit,
+    pathsSelectedIndex: Int,
+    gamepadConnected: Boolean,
+    showChrome: Boolean = true,
+) {
     Box(modifier = Modifier.weight(1f)) {
         when (selectedTab) {
             NavTab.Sensors -> SensorViewport()
-            NavTab.Face -> FaceViewport()
-            NavTab.Track -> ObjectTrackViewport()
+            NavTab.Face -> FaceViewport(
+                faceVm = faceVm,
+                selectedBackend = faceBackend,
+                onBackendChange = onFaceBackendChange,
+                selectedMode = faceMode,
+                onModeChange = onFaceModeChange,
+            )
+            NavTab.Track -> ObjectTrackViewport(
+                trackVm = trackVm,
+                selectedBackend = trackBackend,
+                onBackendChange = onTrackBackendChange,
+                followMode = trackFollowMode,
+                onFollowModeChange = onTrackFollowModeChange,
+            )
             NavTab.Dashboard -> DashboardScreen()
-            NavTab.Drive -> DriveScreen(gamepadManager = gamepadManager)
-            NavTab.Paths -> PathsScreen()
+            NavTab.Drive -> DriveScreen(gamepadManager = gamepadManager, driveVm = driveVm)
+            NavTab.Paths -> PathsScreen(
+                pathsVm = pathsVm,
+                selectedIndex = pathsSelectedIndex,
+                gamepadConnected = gamepadConnected,
+            )
         }
+
     }
 
-    NavigationBar(
-        containerColor = MaterialTheme.colorScheme.surface,
-    ) {
-        NavTab.entries.forEach { tab ->
-            NavigationBarItem(
-                icon = { Icon(tab.icon, contentDescription = tab.label) },
-                label = { Text(tab.label) },
-                selected = selectedTab == tab,
-                onClick = { selectedTab = tab },
-                colors = NavigationBarItemDefaults.colors(
-                    selectedIconColor = Gold,
-                    selectedTextColor = Gold,
-                    indicatorColor = GoldDark.copy(alpha = 0.25f),
-                    unselectedIconColor = MaterialTheme.colorScheme.onSurfaceVariant,
-                    unselectedTextColor = MaterialTheme.colorScheme.onSurfaceVariant,
-                ),
-            )
+    AnimatedVisibility(visible = showChrome, enter = fadeIn(), exit = fadeOut()) {
+        NavigationBar(
+            containerColor = MaterialTheme.colorScheme.surface,
+        ) {
+            NavTab.entries.forEach { tab ->
+                NavigationBarItem(
+                    icon = { Icon(tab.icon, contentDescription = tab.label) },
+                    label = { Text(tab.label) },
+                    selected = selectedTab == tab,
+                    onClick = { onTabChange(tab) },
+                    colors = NavigationBarItemDefaults.colors(
+                        selectedIconColor = Gold,
+                        selectedTextColor = Gold,
+                        indicatorColor = GoldDark.copy(alpha = 0.25f),
+                        unselectedIconColor = MaterialTheme.colorScheme.onSurfaceVariant,
+                        unselectedTextColor = MaterialTheme.colorScheme.onSurfaceVariant,
+                    ),
+                )
+            }
         }
     }
 }

@@ -25,7 +25,8 @@ stream_router = APIRouter(prefix="/api/track", tags=["track"])  # no auth for MJ
 # ── State ─────────────────────────────────────────────────────────────
 _lock = threading.Lock()
 _state = {
-    "status": "idle",       # idle | streaming | tracking | lost
+    "status": "idle",       # idle | loading | streaming | tracking | lost
+    "status_msg": "",
     "confidence": 0.0,
     "rot_speed": 0.0,
     "vx": 0.0,
@@ -65,11 +66,18 @@ def _clamp(value, low, high):
 def _tracker_loop(backend, follow_mode):
     global _latest_jpeg, _reset_flag
 
+    with _lock:
+        _state["status"] = "loading"
+        _state["status_msg"] = f"Loading {backend} matcher..."
+
     import sys
     sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", ".."))
     from object_tracking import create_matcher
 
     matcher = create_matcher(backend)
+
+    with _lock:
+        _state["status_msg"] = "Connecting camera..."
 
     use_realsense = _camera_reader is not None and _camera_reader.connected
     cap = None
@@ -83,6 +91,7 @@ def _tracker_loop(backend, follow_mode):
         if not cap.isOpened():
             with _lock:
                 _state["status"] = "idle"
+                _state["status_msg"] = "Camera failed to open"
             return
 
     udp_sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
@@ -98,7 +107,7 @@ def _tracker_loop(backend, follow_mode):
     fps_t0 = time.perf_counter()
 
     with _lock:
-        _state.update(status="streaming", backend=backend)
+        _state.update(status="streaming", backend=backend, status_msg="")
 
     try:
         while not _stop_event.is_set():
@@ -166,13 +175,22 @@ def _tracker_loop(backend, follow_mode):
                     if match is not None:
                         last_seen = now
                         confidence = match.confidence
+                        is_fallback = getattr(match, "fallback", False)
 
-                        # Draw bounding box
+                        # Draw bounding box — yellow for fallback, green for primary
+                        box_color = (0, 200, 255) if is_fallback else (0, 255, 0)
                         bx1 = int((match.cx - match.w / 2) * fw)
                         by1 = int((match.cy - match.h / 2) * fh)
                         bx2 = int((match.cx + match.w / 2) * fw)
                         by2 = int((match.cy + match.h / 2) * fh)
-                        cv2.rectangle(display, (bx1, by1), (bx2, by2), (0, 255, 0), 2)
+                        cv2.rectangle(display, (bx1, by1), (bx2, by2), box_color, 2)
+                        label = f"fallback {confidence:.0%}" if is_fallback else f"{confidence:.0%}"
+                        lpos = (bx1, by1 - 6)
+                        # outline + fill so text is visible on any background
+                        cv2.putText(display, label, lpos,
+                                    cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 0), 3)
+                        cv2.putText(display, label, lpos,
+                                    cv2.FONT_HERSHEY_SIMPLEX, 0.5, box_color, 1)
 
                         # Drive control
                         if follow_mode:

@@ -16,6 +16,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.FilterChipDefaults
 import androidx.compose.material3.MaterialTheme
@@ -48,6 +49,10 @@ import com.autocar.app.viewmodel.TrackViewModel
 fun ObjectTrackViewport(
     trackVm: TrackViewModel = viewModel(),
     modifier: Modifier = Modifier,
+    selectedBackend: String = "orb",
+    onBackendChange: ((String) -> Unit)? = null,
+    followMode: Boolean = true,
+    onFollowModeChange: ((Boolean) -> Unit)? = null,
 ) {
     val trackState by trackVm.trackState.collectAsState()
     val streamUrl by trackVm.streamUrl.collectAsState()
@@ -57,11 +62,17 @@ fun ObjectTrackViewport(
         onDispose { trackVm.onTabHidden() }
     }
 
-    var selectedBackend by remember { mutableStateOf("orb") }
-    var followMode by remember { mutableStateOf(true) }
+    // Use hoisted state if callbacks provided, otherwise fall back to local state
+    var localBackend by remember { mutableStateOf(selectedBackend) }
+    var localFollow by remember { mutableStateOf(followMode) }
+    val activeBackend = if (onBackendChange != null) selectedBackend else localBackend
+    val activeFollow = if (onFollowModeChange != null) followMode else localFollow
+    val setBackend: (String) -> Unit = onBackendChange ?: { localBackend = it }
+    val setFollow: (Boolean) -> Unit = onFollowModeChange ?: { localFollow = it }
 
     val status = trackState.status
     val isIdle = status == "idle"
+    val isLoading = status == "loading"
     val isStreaming = status == "streaming"
 
     Column(
@@ -101,8 +112,8 @@ fun ObjectTrackViewport(
             FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 backends.forEach { backend ->
                     FilterChip(
-                        selected = selectedBackend == backend,
-                        onClick = { selectedBackend = backend },
+                        selected = activeBackend == backend,
+                        onClick = { setBackend(backend) },
                         label = { Text(backend) },
                         colors = FilterChipDefaults.filterChipColors(
                             selectedContainerColor = GoldDark.copy(alpha = 0.3f),
@@ -120,8 +131,8 @@ fun ObjectTrackViewport(
             ) {
                 Text("Follow mode", style = MaterialTheme.typography.labelLarge, color = Gold)
                 Switch(
-                    checked = followMode,
-                    onCheckedChange = { followMode = it },
+                    checked = activeFollow,
+                    onCheckedChange = { setFollow(it) },
                     colors = SwitchDefaults.colors(
                         checkedThumbColor = Gold,
                         checkedTrackColor = GoldDark.copy(alpha = 0.4f),
@@ -132,12 +143,35 @@ fun ObjectTrackViewport(
             // ── Start button ──
             Button(
                 onClick = {
-                    trackVm.start(backend = selectedBackend, follow = followMode)
+                    trackVm.start(backend = activeBackend, follow = activeFollow)
                 },
                 modifier = Modifier.fillMaxWidth(),
                 colors = ButtonDefaults.buttonColors(containerColor = Gold),
             ) {
                 Text("Start", fontWeight = FontWeight.Bold, color = Color.Black)
+            }
+        } else if (isLoading) {
+            // ── Loading state ──
+            Column(
+                modifier = Modifier.fillMaxWidth().padding(vertical = 32.dp),
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.spacedBy(16.dp),
+            ) {
+                CircularProgressIndicator(color = Gold)
+                Text(
+                    text = trackState.status_msg.ifEmpty { "Loading..." },
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = Gold,
+                )
+            }
+
+            // Stop button during loading
+            Button(
+                onClick = { trackVm.stop() },
+                modifier = Modifier.fillMaxWidth(),
+                colors = ButtonDefaults.buttonColors(containerColor = StatusRed),
+            ) {
+                Text("Cancel", fontWeight = FontWeight.Bold, color = Color.White)
             }
         } else {
             // ── Active states: stream + controls ──
@@ -201,6 +235,7 @@ fun ObjectTrackViewport(
 private fun TrackStatusChip(status: String) {
     val (color, label) = when (status) {
         "idle" -> Pair(MaterialTheme.colorScheme.onSurfaceVariant, "Idle")
+        "loading" -> Pair(StatusYellow, "Loading")
         "streaming" -> Pair(StatusYellow, "Streaming")
         "tracking" -> Pair(StatusGreen, "Tracking")
         "lost" -> Pair(StatusRed, "Lost")

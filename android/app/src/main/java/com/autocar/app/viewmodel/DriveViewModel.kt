@@ -1,13 +1,11 @@
 package com.autocar.app.viewmodel
 
 import android.app.Application
-import android.view.KeyEvent
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.autocar.app.data.api.ApiClient
 import com.autocar.app.data.api.DriveApi
 import com.autocar.app.data.gamepad.GamepadManager
-import com.autocar.app.data.gamepad.GamepadState
 import com.autocar.app.data.model.DriveStatus
 import com.autocar.app.data.settings.SettingsStore
 import com.autocar.app.data.websocket.SensorSocket
@@ -73,9 +71,6 @@ class DriveViewModel(app: Application) : AndroidViewModel(app) {
                 val state = gamepadManager.state.value
                 if (!state.connected) continue
 
-                // Handle buttons
-                handleButtons(state)
-
                 val vx = -state.leftY  // stick up (negative) = forward (positive)
                 val vy = state.leftX
                 val rotSpeed = state.rightX * MAX_ROT_SPEED
@@ -91,17 +86,6 @@ class DriveViewModel(app: Application) : AndroidViewModel(app) {
                     prevSending = false
                 }
             }
-        }
-    }
-
-    private fun handleButtons(state: GamepadState) {
-        // Cross (A) = soft stop
-        if (KeyEvent.KEYCODE_BUTTON_A in state.buttons) {
-            sensorSocket?.sendStop()
-        }
-        // Circle (B) = estop
-        if (KeyEvent.KEYCODE_BUTTON_B in state.buttons) {
-            sensorSocket?.sendEstop()
         }
     }
 

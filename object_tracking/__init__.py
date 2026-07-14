@@ -1,1 +1,1 @@
-from .base import Match, ObjectMatcher, create_matcher, BACKENDS
+from .base import Match, ObjectMatcher, WithFallback, create_matcher, BACKENDS

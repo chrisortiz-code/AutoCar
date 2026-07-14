@@ -26,7 +26,8 @@ stream_router = APIRouter(prefix="/api/face", tags=["face"])  # no auth for MJPE
 # ── State ─────────────────────────────────────────────────────────────
 _lock = threading.Lock()
 _state = {
-    "status": "idle",       # idle | tracing | selecting | following | lost
+    "status": "idle",       # idle | loading | tracing | selecting | following | lost
+    "status_msg": "",
     "tracking": False,
     "rot_speed": 0.0,
     "vx": 0.0,
@@ -98,11 +99,18 @@ def _face_depth(depth_frame, face):
 def _tracker_loop(backend, camera_index, follow_mode):
     global _detector, _cap, _latest_jpeg, _confirm_flag, _reset_flag
 
+    with _lock:
+        _state["status"] = "loading"
+        _state["status_msg"] = f"Loading {backend} model..."
+
     import sys
     sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", ".."))
     from face_detection import create_detector
 
     _detector = create_detector(backend)
+
+    with _lock:
+        _state["status_msg"] = "Connecting camera..."
 
     # Use the shared CameraReader (RealSense) if available, otherwise fall back to V4L2
     use_realsense = _camera_reader is not None and _camera_reader.connected
@@ -117,6 +125,7 @@ def _tracker_loop(backend, camera_index, follow_mode):
             with _lock:
                 _state["status"] = "idle"
                 _state["tracking"] = False
+                _state["status_msg"] = "Camera failed to open"
             return
 
     udp_sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
@@ -137,6 +146,7 @@ def _tracker_loop(backend, camera_index, follow_mode):
     with _lock:
         _state["status"] = "tracing" if not follow_mode else "selecting"
         _state["tracking"] = tracking
+        _state["status_msg"] = ""
 
     try:
         while not _stop_event.is_set():

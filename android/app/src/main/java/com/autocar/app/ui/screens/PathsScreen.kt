@@ -1,5 +1,6 @@
 package com.autocar.app.ui.screens
 
+import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -7,6 +8,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
@@ -37,7 +39,11 @@ import com.autocar.app.ui.theme.Gold
 import com.autocar.app.viewmodel.PathsViewModel
 
 @Composable
-fun PathsScreen(pathsVm: PathsViewModel = viewModel()) {
+fun PathsScreen(
+    pathsVm: PathsViewModel = viewModel(),
+    selectedIndex: Int = -1,
+    gamepadConnected: Boolean = false,
+) {
     val paths by pathsVm.paths.collectAsState()
     val status by pathsVm.status.collectAsState()
     val error by pathsVm.error.collectAsState()
@@ -96,8 +102,16 @@ fun PathsScreen(pathsVm: PathsViewModel = viewModel()) {
             Text(text = it, color = MaterialTheme.colorScheme.error, modifier = Modifier.padding(vertical = 4.dp))
         }
 
-        paths.forEach { path ->
-            Card(modifier = Modifier.fillMaxWidth()) {
+        paths.forEachIndexed { index, path ->
+            val isSelected = gamepadConnected && index == selectedIndex
+            Card(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .then(
+                        if (isSelected) Modifier.border(2.dp, Gold, RoundedCornerShape(12.dp))
+                        else Modifier
+                    ),
+            ) {
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()

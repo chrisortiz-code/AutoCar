@@ -73,6 +73,7 @@ def query_motor_status(timeout=0.3):
 
 def send_drive(vx, vy, trans_speed, rot_speed):
     """Send a 'D' drive packet (mecanum mixing done by receiver)."""
+    print(f"[motor] D  vx={vx:+.2f} vy={vy:+.2f} spd={trans_speed:.2f} rot={rot_speed:+.2f}")
     _udp_sock.sendto(
         b"D" + struct.pack("<ffff", vx, vy, trans_speed, rot_speed), _udp_dest
     )
@@ -80,17 +81,21 @@ def send_drive(vx, vy, trans_speed, rot_speed):
 
 def send_wheels(wheel_vels):
     """Send a 'W' per-wheel velocity packet. wheel_vels: {nid: vel}."""
-    data = struct.pack("<ffff", *(wheel_vels.get(nid, 0.0) for nid in range(4)))
+    vals = [wheel_vels.get(nid, 0.0) for nid in range(4)]
+    print(f"[motor] W  BL={vals[0]:+.2f} FL={vals[1]:+.2f} BR={vals[2]:+.2f} FR={vals[3]:+.2f}")
+    data = struct.pack("<ffff", *vals)
     _udp_sock.sendto(b"W" + data, _udp_dest)
 
 
 def send_stop():
     """Send an 'S' stop packet (zero velocity, stay armed)."""
+    print("[motor] S  stop")
     _udp_sock.sendto(b"S", _udp_dest)
 
 
 def send_estop():
     """Send an 'E' e-stop packet."""
+    print("[motor] E  ESTOP")
     _udp_sock.sendto(b"E", _udp_dest)
 
 

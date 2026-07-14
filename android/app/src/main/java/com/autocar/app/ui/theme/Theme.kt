@@ -3,6 +3,7 @@ package com.autocar.app.ui.theme
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.darkColorScheme
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 
 private val AutoCarColorScheme = darkColorScheme(
     primary = Gold,
@@ -38,11 +39,14 @@ private val AutoCarColorScheme = darkColorScheme(
 
 @Composable
 fun AutoCarTheme(
+    scaleFactor: Float = 1.0f,
     content: @Composable () -> Unit,
 ) {
-    MaterialTheme(
-        colorScheme = AutoCarColorScheme,
-        typography = Typography,
-        content = content,
-    )
+    CompositionLocalProvider(LocalUiScale provides scaleFactor) {
+        MaterialTheme(
+            colorScheme = AutoCarColorScheme,
+            typography = scaledTypography(Typography, scaleFactor),
+            content = content,
+        )
+    }
 }

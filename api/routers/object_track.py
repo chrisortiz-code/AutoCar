@@ -185,12 +185,12 @@ def _tracker_loop(backend, follow_mode):
                         by2 = int((match.cy + match.h / 2) * fh)
                         cv2.rectangle(display, (bx1, by1), (bx2, by2), box_color, 2)
                         label = f"fallback {confidence:.0%}" if is_fallback else f"{confidence:.0%}"
-                        lpos = (bx1, by1 - 6)
-                        # outline + fill so text is visible on any background
+                        lpos = (bx1, max(by1 - 8, 14))
+                        # dark outline + bright fill for visibility
                         cv2.putText(display, label, lpos,
-                                    cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 0), 3)
+                                    cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 0), 2, cv2.LINE_AA)
                         cv2.putText(display, label, lpos,
-                                    cv2.FONT_HERSHEY_SIMPLEX, 0.5, box_color, 1)
+                                    cv2.FONT_HERSHEY_SIMPLEX, 0.5, box_color, 1, cv2.LINE_AA)
 
                         # Drive control
                         if follow_mode:

@@ -10,7 +10,6 @@ Flow:
 Usage:
     python -m object_tracking.bench --backend orb --stream
     python -m object_tracking.bench --backend sift --preview
-    python -m object_tracking.bench --backend template --stream
     python -m object_tracking.bench --backend akaze --ref target.png --stream
 
 --ref: skip crop step, load reference image from file

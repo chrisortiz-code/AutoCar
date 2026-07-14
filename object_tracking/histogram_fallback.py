@@ -2,9 +2,11 @@
 
 When the primary backend returns None, this uses OpenCV's calcBackProject
 to produce a per-pixel probability map from the reference HSV histogram,
-then finds the peak via CamShift.  Runs entirely in OpenCV C++ — fast
-enough for real-time on Jetson (~1-2 ms per frame at 424×240).
+then finds the peak.  Runs entirely in OpenCV C++ — fast enough for
+real-time on Jetson (~1-2 ms per frame at 424x240).
 
+Uses an elliptical center-weighted mask when building the reference
+histogram so edge/background pixels in the crop don't bias the match.
 The confidence is the Bhattacharyya similarity (0..1) between the
 reference histogram and the histogram of the winning region.
 """
@@ -18,6 +20,13 @@ H_BINS, S_BINS = 30, 32
 RANGES = [0, 180, 0, 256]
 
 
+def _center_mask(h, w):
+    """Elliptical mask that weights the center of the crop."""
+    mask = np.zeros((h, w), dtype=np.uint8)
+    cv2.ellipse(mask, (w // 2, h // 2), (w // 2, h // 2), 0, 0, 360, 255, -1)
+    return mask
+
+
 class HistogramFallback:
     """Back-projection based fallback — always returns a Match."""
 
@@ -27,9 +36,12 @@ class HistogramFallback:
         self._ref_w = 0
 
     def set_reference(self, image_bgr):
+        h, w = image_bgr.shape[:2]
+        self._ref_h, self._ref_w = h, w
         hsv = cv2.cvtColor(image_bgr, cv2.COLOR_BGR2HSV)
-        self._ref_h, self._ref_w = image_bgr.shape[:2]
-        hist = cv2.calcHist([hsv], [0, 1], None, [H_BINS, S_BINS], RANGES)
+        # center-weighted mask — ignore background pixels near crop edges
+        mask = _center_mask(h, w)
+        hist = cv2.calcHist([hsv], [0, 1], mask, [H_BINS, S_BINS], RANGES)
         cv2.normalize(hist, hist, 0, 255, cv2.NORM_MINMAX)
         self._ref_hist = hist
 
@@ -47,7 +59,6 @@ class HistogramFallback:
         cv2.GaussianBlur(bp, (5, 5), 0, dst=bp)
 
         # find peak location via matchTemplate on the probability map
-        # use a uniform kernel the size of the reference as a box filter
         kern_h = min(self._ref_h, fh - 1)
         kern_w = min(self._ref_w, fw - 1)
         if kern_h < 5 or kern_w < 5:
@@ -62,9 +73,10 @@ class HistogramFallback:
         cx = (x + kern_w / 2) / fw
         cy = (y + kern_h / 2) / fh
 
-        # compute Bhattacharyya similarity for the winning patch
+        # score the winning patch with center-weighted histogram too
         patch_hsv = hsv[y:y + kern_h, x:x + kern_w]
-        patch_hist = cv2.calcHist([patch_hsv], [0, 1], None,
+        patch_mask = _center_mask(kern_h, kern_w)
+        patch_hist = cv2.calcHist([patch_hsv], [0, 1], patch_mask,
                                   [H_BINS, S_BINS], RANGES)
         cv2.normalize(patch_hist, patch_hist, 0, 255, cv2.NORM_MINMAX)
         bhatt = cv2.compareHist(self._ref_hist, patch_hist,

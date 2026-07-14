@@ -108,7 +108,7 @@ fun ObjectTrackViewport(
         if (isIdle) {
             // ── Backend selector ──
             Text("Backend", style = MaterialTheme.typography.labelLarge, color = Gold)
-            val backends = listOf("orb", "akaze", "sift", "template")
+            val backends = listOf("orb", "akaze", "sift")
             FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 backends.forEach { backend ->
                     FilterChip(
@@ -253,7 +253,7 @@ private fun TrackStatusChip(status: String) {
 @Composable
 private fun TrackStatLabel(label: String, value: String) {
     Column(horizontalAlignment = Alignment.CenterHorizontally) {
-        Text(value, style = MaterialTheme.typography.titleMedium)
+        Text(value, style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.onSurface)
         Text(label, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
     }
 }

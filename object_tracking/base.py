@@ -39,7 +39,6 @@ class ObjectMatcher:
 
 
 BACKENDS = {
-    "template":  "object_tracking.template_backend",
     "orb":       "object_tracking.orb_backend",
     "akaze":     "object_tracking.akaze_backend",
     "sift":      "object_tracking.sift_backend",

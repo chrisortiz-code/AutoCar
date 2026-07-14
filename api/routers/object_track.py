@@ -12,6 +12,7 @@ import threading
 import time
 
 import cv2
+import numpy as np
 from fastapi import APIRouter, Depends
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
@@ -55,10 +56,31 @@ AREA_DEADZONE = 0.08
 AREA_GAIN = 0.70
 CONTROL_HZ = 20
 LOST_TIMEOUT = 1.0
+DEPTH_DEADZONE_MM = 150
+DEPTH_GAIN_MM = 1500.0
+DEPTH_CLUSTER_MM = 400
 
 
 def _clamp(value, low, high):
     return max(low, min(high, value))
+
+
+def _sample_depth(depth_frame, cx, cy, w, h):
+    """Sample median-clustered depth (mm) from a normalized bounding box."""
+    if depth_frame is None:
+        return 0
+    fh, fw = depth_frame.shape[:2]
+    x1 = max(0, int((cx - w / 2) * fw))
+    y1 = max(0, int((cy - h / 2) * fh))
+    x2 = min(fw, int((cx + w / 2) * fw))
+    y2 = min(fh, int((cy + h / 2) * fh))
+    roi = depth_frame[y1:y2, x1:x2]
+    valid = roi[roi > 0].astype(np.float32)
+    if len(valid) == 0:
+        return 0
+    med = np.median(valid)
+    cluster = valid[np.abs(valid - med) <= DEPTH_CLUSTER_MM]
+    return int(np.mean(cluster)) if len(cluster) > 0 else int(med)
 
 
 # ── Tracker thread ────────────────────────────────────────────────────
@@ -101,6 +123,7 @@ def _tracker_loop(backend, follow_mode):
     last_seen = 0.0
     driving = False
     target_area = None
+    target_depth = 0  # mm, captured at selection time (0 = not set)
     has_reference = False
 
     fps_count = 0
@@ -136,6 +159,7 @@ def _tracker_loop(backend, follow_mode):
             if reset:
                 has_reference = False
                 target_area = None
+                target_depth = 0
                 if driving:
                     udp_sock.sendto(b"S", udp_dest)
                     driving = False
@@ -159,6 +183,14 @@ def _tracker_loop(backend, follow_mode):
                     crop = frame[py1:py2, px1:px2]
                     matcher.set_reference(crop)
                     target_area = ((px2 - px1) * (py2 - py1)) / (fw * fh)
+                    # capture depth at selection if RealSense available
+                    if use_realsense:
+                        depth_frame = frames.get("depth")
+                        ncx = (px1 + px2) / 2 / fw
+                        ncy = (py1 + py2) / 2 / fh
+                        nw = (px2 - px1) / fw
+                        nh = (py2 - py1) / fh
+                        target_depth = _sample_depth(depth_frame, ncx, ncy, nw, nh)
                     has_reference = True
                     with _lock:
                         _state["status"] = "tracking"
@@ -199,7 +231,15 @@ def _tracker_loop(backend, follow_mode):
                                 rot_magnitude = (abs(horiz_error) - DEADZONE) / (1.0 - DEADZONE)
                                 rot_speed = (1.0 if horiz_error > 0 else -1.0) * _clamp(rot_magnitude, 0.0, 1.0) * MAX_ROT_SPEED
 
-                            if target_area:
+                            # range control: prefer depth, fall back to area
+                            depth_frame = frames.get("depth") if use_realsense else None
+                            cur_depth = _sample_depth(depth_frame, match.cx, match.cy, match.w, match.h) if depth_frame is not None else 0
+                            if target_depth > 0 and cur_depth > 0:
+                                depth_error = cur_depth - target_depth
+                                if abs(depth_error) >= DEPTH_DEADZONE_MM:
+                                    range_mag = (abs(depth_error) - DEPTH_DEADZONE_MM) / DEPTH_GAIN_MM
+                                    vx = (1.0 if depth_error > 0 else -1.0) * _clamp(range_mag, 0.0, 1.0)
+                            elif target_area:
                                 current_area = match.w * match.h
                                 area_error = (target_area - current_area) / target_area
                                 if abs(area_error) >= AREA_DEADZONE:

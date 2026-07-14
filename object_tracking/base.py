@@ -46,18 +46,17 @@ BACKENDS = {
 
 
 class WithFallback(ObjectMatcher):
-    """Wrapper: runs primary backend, falls back to histogram cosine
-    similarity when the primary returns None.  Always produces a Match."""
+    """Wrapper: runs primary backend, falls back to color-blob tracking
+    when the primary returns None."""
 
     def __init__(self, primary: ObjectMatcher):
-        from .histogram_fallback import HistogramFallback
+        from .histogram_fallback import ColorBlobFallback
         self._primary = primary
-        self._fallback = HistogramFallback()
+        self._fallback = ColorBlobFallback()
         self.name = primary.name
 
     def set_reference(self, image_bgr):
         self._primary.set_reference(image_bgr)
-        h, w = image_bgr.shape[:2]
         self._fallback.set_reference(image_bgr)
 
     def find(self, frame_bgr) -> Match | None:

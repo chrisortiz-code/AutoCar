@@ -11,6 +11,9 @@ data class TrackState(
     val vx: Float = 0f,
     val fps: Float = 0f,
     val backend: String = "orb",
+    val follow: Boolean = false,
+    val target_depth: Int = 0,
+    val cur_depth: Int = 0,
 )
 
 @Serializable

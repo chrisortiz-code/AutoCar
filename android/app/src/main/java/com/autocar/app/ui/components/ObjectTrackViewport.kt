@@ -130,6 +130,29 @@ fun ObjectTrackViewport(
                     TrackStatLabel("Vx", "%.2f".format(trackState.vx))
                 }
 
+                // Depth row (follow mode only)
+                if (trackState.follow) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceEvenly,
+                    ) {
+                        TrackStatLabel(
+                            "Set Depth",
+                            if (trackState.target_depth > 0) "${trackState.target_depth}mm" else "--",
+                        )
+                        TrackStatLabel(
+                            "Cur Depth",
+                            if (trackState.cur_depth > 0) "${trackState.cur_depth}mm" else "--",
+                        )
+                        TrackStatLabel(
+                            "Error",
+                            if (trackState.target_depth > 0 && trackState.cur_depth > 0)
+                                "${trackState.cur_depth - trackState.target_depth}mm"
+                            else "--",
+                        )
+                    }
+                }
+
                 // Action buttons
                 Row(
                     modifier = Modifier.fillMaxWidth(),

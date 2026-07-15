@@ -33,6 +33,9 @@ _state = {
     "vx": 0.0,
     "fps": 0.0,
     "backend": "orb",
+    "follow": False,
+    "target_depth": 0,      # mm, 0 = not set
+    "cur_depth": 0,         # mm, live depth reading
 }
 _tracker_thread = None
 _stop_event = threading.Event()
@@ -137,7 +140,8 @@ def _tracker_loop(backend, follow_mode):
     fps_t0 = time.perf_counter()
 
     with _lock:
-        _state.update(status="streaming", backend=backend, status_msg="")
+        _state.update(status="streaming", backend=backend, status_msg="",
+                      follow=follow_mode, target_depth=0, cur_depth=0)
 
     try:
         while not _stop_event.is_set():
@@ -174,7 +178,8 @@ def _tracker_loop(backend, follow_mode):
                     driving = False
                 with _lock:
                     _state.update(status="streaming", confidence=0.0,
-                                  rot_speed=0.0, vx=0.0)
+                                  rot_speed=0.0, vx=0.0,
+                                  target_depth=0, cur_depth=0)
 
             # Process new bounding box selection
             if bboxes:
@@ -199,6 +204,8 @@ def _tracker_loop(backend, follow_mode):
                         nw = (px2 - px1) / fw
                         nh = (py2 - py1) / fh
                         target_depth = _sample_depth(depth_frame, ncx, ncy, nw, nh)
+                    with _lock:
+                        _state["target_depth"] = int(target_depth)
                     has_reference = True
                     # freeze the stream briefly to show what was selected
                     snap = frame.copy()
@@ -284,7 +291,8 @@ def _tracker_loop(backend, follow_mode):
                         status = "tracking"
                         with _lock:
                             _state.update(status=status, confidence=confidence,
-                                          rot_speed=rot_speed, vx=vx)
+                                          rot_speed=rot_speed, vx=vx,
+                                          cur_depth=int(cur_depth) if follow_mode else 0)
                     else:
                         if driving and (now - last_seen) >= LOST_TIMEOUT:
                             udp_sock.sendto(b"S", udp_dest)

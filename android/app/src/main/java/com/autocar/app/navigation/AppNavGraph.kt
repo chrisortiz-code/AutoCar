@@ -16,6 +16,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.material.icons.Icons
@@ -210,7 +211,15 @@ fun AppNavGraph(
 
     val showChrome = chromeVisible || scaleLevel < 3
 
-    Box(modifier = Modifier.fillMaxSize()) {
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+            .pointerInput(scaleLevel) {
+                if (scaleLevel >= 3) {
+                    detectTapGestures { lastButtonPress = System.currentTimeMillis() }
+                }
+            },
+    ) {
         Column(modifier = Modifier.fillMaxSize()) {
             AnimatedVisibility(visible = showChrome, enter = fadeIn(), exit = fadeOut()) {
                 TopBar(gamepadConnected)
@@ -405,6 +414,7 @@ private fun ColumnScope.TabletLandscapeLayout(
         // Left rail — viewport selector
         AnimatedVisibility(visible = showChrome, enter = fadeIn(), exit = fadeOut()) {
             NavigationRail(
+                modifier = Modifier.width((80 * scale).dp),
                 containerColor = MaterialTheme.colorScheme.surface,
             ) {
                 Viewport.entries.forEach { vp ->
@@ -472,6 +482,7 @@ private fun ColumnScope.TabletLandscapeLayout(
         // Right rail — side panel tabs
         AnimatedVisibility(visible = showChrome, enter = fadeIn(), exit = fadeOut()) {
             NavigationRail(
+                modifier = Modifier.width((80 * scale).dp),
                 containerColor = MaterialTheme.colorScheme.surface,
             ) {
                 railTabs.forEach { tab ->
@@ -557,6 +568,7 @@ private fun ColumnScope.GridLayout(
         // Left rail — viewport selector (same as classic)
         AnimatedVisibility(visible = showChrome, enter = fadeIn(), exit = fadeOut()) {
             NavigationRail(
+                modifier = Modifier.width((80 * scale).dp),
                 containerColor = MaterialTheme.colorScheme.surface,
             ) {
                 Viewport.entries.forEach { vp ->
@@ -841,6 +853,7 @@ private fun ColumnScope.PhoneLayout(
     AnimatedVisibility(visible = showChrome, enter = fadeIn(), exit = fadeOut()) {
         val scale = LocalUiScale.current
         NavigationBar(
+            modifier = Modifier.height((80 * scale).dp),
             containerColor = MaterialTheme.colorScheme.surface,
         ) {
             NavTab.entries.forEach { tab ->

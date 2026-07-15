@@ -52,9 +52,9 @@ def set_camera_reader(camera):
 
 
 # ── Configuration ─────────────────────────────────────────────────────
-HSV_TOL_H = 25
-HSV_TOL_S = 70
-HSV_TOL_V = 70
+HSV_TOL_H = 30
+HSV_TOL_S = 80
+HSV_TOL_V = 80
 MIN_BLOB = 500
 SAMPLE_SIZE = 5
 

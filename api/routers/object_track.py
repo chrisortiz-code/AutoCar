@@ -189,8 +189,7 @@ def _tracker_loop(backend, follow_mode):
                 py1, py2 = min(py1, py2), max(py1, py2)
                 # Minimum size check
                 if (px2 - px1) > 10 and (py2 - py1) > 10:
-                    crop = frame[py1:py2, px1:px2]
-                    matcher.set_reference(crop)
+                    matcher.set_reference_roi(frame, px1, py1, px2, py2)
                     target_area = ((px2 - px1) * (py2 - py1)) / (fw * fh)
                     # capture depth at selection if RealSense available
                     if use_realsense:

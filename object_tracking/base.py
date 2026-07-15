@@ -24,6 +24,15 @@ class ObjectMatcher:
         """Set the reference image (tight crop of target object)."""
         raise NotImplementedError
 
+    def set_reference_roi(self, frame_bgr, x1, y1, x2, y2):
+        """Set reference from a region in the full frame (pixel coords).
+
+        Tracker-style backends override this to call tracker.init().
+        Default: crops the frame and delegates to set_reference().
+        """
+        crop = frame_bgr[y1:y2, x1:x2]
+        self.set_reference(crop)
+
     def find(self, frame_bgr) -> Match | None:
         """Find the reference object in the frame. Returns best match or None."""
         raise NotImplementedError
@@ -43,6 +52,7 @@ BACKENDS = {
     "akaze":      "object_tracking.akaze_backend",
     "sift":       "object_tracking.sift_backend",
     "lightglue":  "object_tracking.lightglue_backend",
+    "csrt":       "object_tracking.csrt_backend",
 }
 
 
@@ -59,6 +69,11 @@ class WithFallback(ObjectMatcher):
     def set_reference(self, image_bgr):
         self._primary.set_reference(image_bgr)
         self._fallback.set_reference(image_bgr)
+
+    def set_reference_roi(self, frame_bgr, x1, y1, x2, y2):
+        self._primary.set_reference_roi(frame_bgr, x1, y1, x2, y2)
+        crop = frame_bgr[y1:y2, x1:x2]
+        self._fallback.set_reference(crop)
 
     def find(self, frame_bgr) -> Match | None:
         result = self._primary.find(frame_bgr)

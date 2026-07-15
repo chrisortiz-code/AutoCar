@@ -312,18 +312,19 @@ fun GamepadNavEffect(
 fun GamepadControlsButton(currentTab: NavTab) {
     var showPopup by remember { mutableStateOf(false) }
 
+    val scale = LocalUiScale.current
     Box {
         IconButton(
             onClick = { showPopup = true },
             modifier = Modifier
-                .size(40.dp)
+                .size((40 * scale).dp)
                 .background(GoldDark.copy(alpha = 0.5f), CircleShape),
         ) {
             Icon(
                 Icons.Default.SportsEsports,
                 contentDescription = "Controls",
                 tint = Gold,
-                modifier = Modifier.size(22.dp),
+                modifier = Modifier.size((22 * scale).dp),
             )
         }
 

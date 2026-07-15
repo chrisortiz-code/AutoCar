@@ -104,6 +104,13 @@ fun ObjectTrackViewport(
         }
 
         if (isIdle) {
+            // ── Mode selector ──
+            Text("Mode", style = MaterialTheme.typography.labelLarge, color = Gold)
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                TrackModeButton("Trace", activeMode == "trace") { setMode("trace") }
+                TrackModeButton("Follow", activeMode == "follow") { setMode("follow") }
+            }
+
             // ── Backend selector ──
             Text("Backend", style = MaterialTheme.typography.labelLarge, color = Gold)
             val backends = listOf("orb", "akaze", "sift")
@@ -119,13 +126,6 @@ fun ObjectTrackViewport(
                         ),
                     )
                 }
-            }
-
-            // ── Mode selector ──
-            Text("Mode", style = MaterialTheme.typography.labelLarge, color = Gold)
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                TrackModeButton("Trace", activeMode == "trace") { setMode("trace") }
-                TrackModeButton("Follow", activeMode == "follow") { setMode("follow") }
             }
 
             // ── Start button ──

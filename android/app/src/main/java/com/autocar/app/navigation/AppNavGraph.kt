@@ -76,6 +76,7 @@ import com.autocar.app.ui.screens.DriveScreen
 import com.autocar.app.ui.screens.PathsScreen
 import com.autocar.app.ui.theme.Gold
 import com.autocar.app.ui.theme.GoldDark
+import com.autocar.app.ui.theme.LocalUiScale
 import com.autocar.app.ui.theme.Rajdhani
 import com.autocar.app.ui.theme.SurfaceDark
 import kotlinx.coroutines.delay
@@ -136,21 +137,21 @@ fun AppNavGraph(
     // Classic tablet layout state (hoisted for gamepad access)
     var classicActiveTab by remember { mutableStateOf<NavTab?>(null) }
 
-    // Auto-hide chrome at scale level 5 (index 4)
+    // Auto-hide chrome at scale level 4+ (index 3 = 1.75x)
     var chromeVisible by remember { mutableStateOf(true) }
     var lastButtonPress by remember { mutableLongStateOf(System.currentTimeMillis()) }
 
     LaunchedEffect(lastButtonPress) {
-        if (scaleLevel >= 4) { // level 5 = index 4
+        if (scaleLevel >= 3) { // level 4 = index 3 (1.75x)
             chromeVisible = true
             delay(3000)
             chromeVisible = false
         }
     }
 
-    // Reset chrome visibility when leaving scale level 5
+    // Reset chrome visibility when leaving auto-hide range
     LaunchedEffect(scaleLevel) {
-        if (scaleLevel < 4) chromeVisible = true
+        if (scaleLevel < 3) chromeVisible = true
     }
 
     // ViewModels shared with GamepadNavEffect
@@ -207,7 +208,7 @@ fun AppNavGraph(
         } else null,
     )
 
-    val showChrome = chromeVisible || scaleLevel < 4
+    val showChrome = chromeVisible || scaleLevel < 3
 
     Box(modifier = Modifier.fillMaxSize()) {
         Column(modifier = Modifier.fillMaxSize()) {
@@ -305,8 +306,8 @@ fun AppNavGraph(
                 modifier = Modifier
                     .align(Alignment.BottomStart)
                     .padding(
-                        start = if (useRail) 92.dp else 12.dp,
-                        bottom = if (useRail) 12.dp else 92.dp,
+                        start = if (useRail) (92 * LocalUiScale.current).dp else (12 * LocalUiScale.current).dp,
+                        bottom = if (useRail) (12 * LocalUiScale.current).dp else (92 * LocalUiScale.current).dp,
                     ),
             ) {
                 GamepadControlsButton(currentTab = selectedTab)
@@ -317,10 +318,11 @@ fun AppNavGraph(
 
 @Composable
 private fun TopBar(gamepadConnected: Boolean) {
+    val scale = LocalUiScale.current
     Box(
         modifier = Modifier
             .fillMaxWidth()
-            .height(44.dp)
+            .height((44 * scale).dp)
             .background(
                 Brush.horizontalGradient(
                     colors = listOf(GoldDark, Gold, GoldDark),
@@ -331,14 +333,14 @@ private fun TopBar(gamepadConnected: Boolean) {
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(horizontal = 16.dp),
+                .padding(horizontal = (16 * scale).dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
             Text(
                 text = "AUTOCAR",
                 fontFamily = Rajdhani,
                 fontWeight = FontWeight.Bold,
-                fontSize = 22.sp,
+                fontSize = (22 * scale).sp,
                 color = SurfaceDark,
                 letterSpacing = 3.sp,
                 modifier = Modifier.weight(1f),
@@ -348,7 +350,7 @@ private fun TopBar(gamepadConnected: Boolean) {
                     Icons.Default.SportsEsports,
                     contentDescription = "Gamepad connected",
                     tint = SurfaceDark,
-                    modifier = Modifier.size(20.dp),
+                    modifier = Modifier.size((20 * scale).dp),
                 )
             }
         }
@@ -397,6 +399,8 @@ private fun ColumnScope.TabletLandscapeLayout(
         }
     }
 
+    val scale = LocalUiScale.current
+
     Row(modifier = Modifier.weight(1f)) {
         // Left rail — viewport selector
         AnimatedVisibility(visible = showChrome, enter = fadeIn(), exit = fadeOut()) {
@@ -405,7 +409,7 @@ private fun ColumnScope.TabletLandscapeLayout(
             ) {
                 Viewport.entries.forEach { vp ->
                     NavigationRailItem(
-                        icon = { Icon(vp.icon, contentDescription = vp.label) },
+                        icon = { Icon(vp.icon, contentDescription = vp.label, modifier = Modifier.size((24 * scale).dp)) },
                         label = { Text(vp.label) },
                         selected = viewport == vp,
                         onClick = { viewport = vp },
@@ -472,7 +476,7 @@ private fun ColumnScope.TabletLandscapeLayout(
             ) {
                 railTabs.forEach { tab ->
                     NavigationRailItem(
-                        icon = { Icon(tab.icon, contentDescription = tab.label) },
+                        icon = { Icon(tab.icon, contentDescription = tab.label, modifier = Modifier.size((24 * scale).dp)) },
                         label = { Text(tab.label) },
                         selected = activeTab == tab,
                         onClick = {
@@ -547,6 +551,8 @@ private fun ColumnScope.GridLayout(
         }
     }
 
+    val scale = LocalUiScale.current
+
     Row(modifier = Modifier.weight(1f)) {
         // Left rail — viewport selector (same as classic)
         AnimatedVisibility(visible = showChrome, enter = fadeIn(), exit = fadeOut()) {
@@ -555,7 +561,7 @@ private fun ColumnScope.GridLayout(
             ) {
                 Viewport.entries.forEach { vp ->
                     NavigationRailItem(
-                        icon = { Icon(vp.icon, contentDescription = vp.label) },
+                        icon = { Icon(vp.icon, contentDescription = vp.label, modifier = Modifier.size((24 * scale).dp)) },
                         label = { Text(vp.label) },
                         selected = viewport == vp && expandedCell == null,
                         onClick = {
@@ -833,12 +839,13 @@ private fun ColumnScope.PhoneLayout(
     }
 
     AnimatedVisibility(visible = showChrome, enter = fadeIn(), exit = fadeOut()) {
+        val scale = LocalUiScale.current
         NavigationBar(
             containerColor = MaterialTheme.colorScheme.surface,
         ) {
             NavTab.entries.forEach { tab ->
                 NavigationBarItem(
-                    icon = { Icon(tab.icon, contentDescription = tab.label) },
+                    icon = { Icon(tab.icon, contentDescription = tab.label, modifier = Modifier.size((24 * scale).dp)) },
                     label = { Text(tab.label) },
                     selected = selectedTab == tab,
                     onClick = { onTabChange(tab) },

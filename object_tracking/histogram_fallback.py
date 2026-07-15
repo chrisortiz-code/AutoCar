@@ -14,9 +14,9 @@ import numpy as np
 from .base import Match
 
 # HSV tolerance around the sampled color
-HSV_TOL_H = 15
-HSV_TOL_S = 50
-HSV_TOL_V = 50
+HSV_TOL_H = 25
+HSV_TOL_S = 70
+HSV_TOL_V = 70
 
 # minimum contour area in pixels to count as a detection
 MIN_BLOB = 300

@@ -26,6 +26,40 @@ def _hsv_histogram(image_bgr):
     return hist
 
 
+def _relocate(frame_bgr, crop, orig_x, orig_y):
+    """Find the crop's actual location in frame via template matching.
+
+    Searches a padded region around the original position so small
+    movements between the drag frame and current frame are corrected.
+    Returns (x, y, w, h) in pixel coords.
+    """
+    ch, cw = crop.shape[:2]
+    fh, fw = frame_bgr.shape[:2]
+
+    # Search in a region 2x the crop size around the original position
+    pad_x, pad_y = cw, ch
+    sx1 = max(0, orig_x - pad_x)
+    sy1 = max(0, orig_y - pad_y)
+    sx2 = min(fw, orig_x + cw + pad_x)
+    sy2 = min(fh, orig_y + ch + pad_y)
+    search_roi = frame_bgr[sy1:sy2, sx1:sx2]
+
+    # Need search region larger than template
+    if search_roi.shape[0] <= ch or search_roi.shape[1] <= cw:
+        return orig_x, orig_y, cw, ch
+
+    result = cv2.matchTemplate(search_roi, crop, cv2.TM_CCOEFF_NORMED)
+    _, max_val, _, max_loc = cv2.minMaxLoc(result)
+
+    # Only use relocated position if it's a good match
+    if max_val < 0.4:
+        return orig_x, orig_y, cw, ch
+
+    rx = sx1 + max_loc[0]
+    ry = sy1 + max_loc[1]
+    return rx, ry, cw, ch
+
+
 class CSRTMatcher(ObjectMatcher):
     name = "csrt"
 
@@ -42,11 +76,15 @@ class CSRTMatcher(ObjectMatcher):
     def set_reference_roi(self, frame_bgr, x1, y1, x2, y2):
         crop = frame_bgr[y1:y2, x1:x2]
         self._ref_hist = _hsv_histogram(crop)
-        # (Re-)create tracker each time a new target is selected
+        self._ref_crop = crop.copy()
+
+        # The bbox was drawn on an earlier frame — relocate the crop
+        # in the current frame via template matching so the tracker
+        # starts at the right position.
+        rx, ry, rw, rh = _relocate(frame_bgr, crop, x1, y1)
+
         self._tracker = cv2.TrackerCSRT_create()
-        w = x2 - x1
-        h = y2 - y1
-        self._tracker.init(frame_bgr, (x1, y1, w, h))
+        self._tracker.init(frame_bgr, (rx, ry, rw, rh))
 
     def find(self, frame_bgr) -> Match | None:
         if self._tracker is None:

@@ -64,121 +64,110 @@ fun ColorViewport(
     val isStreaming = status == "streaming"
     val isPicking = status == "picking"
 
-    Column(
-        modifier = modifier
-            .fillMaxSize()
-            .verticalScroll(rememberScrollState())
-            .padding(horizontal = 8.dp, vertical = 8.dp),
-        verticalArrangement = Arrangement.spacedBy(12.dp),
-    ) {
-        // ── Header ──
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Text(
-                text = "Color Tracking",
-                style = MaterialTheme.typography.titleLarge,
-                color = Gold,
-            )
-            ColorStatusChip(status)
-        }
-
-        // ── Error ──
-        if (error != null) {
-            Text(
-                text = "Error: $error",
-                color = StatusRed,
-                style = MaterialTheme.typography.bodySmall,
-            )
-        }
-
-        if (isIdle) {
-            // ── Mode selector ──
-            Text("Mode", style = MaterialTheme.typography.labelLarge, color = Gold)
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                ColorModeButton("Trace", activeMode == "trace") { setMode("trace") }
-                ColorModeButton("Follow", activeMode == "follow") { setMode("follow") }
-            }
-
-            // ── Start button ──
-            Button(
-                onClick = { colorVm.start(follow = activeMode == "follow") },
-                modifier = Modifier.fillMaxWidth(),
-                colors = ButtonDefaults.buttonColors(containerColor = Gold),
-            ) {
-                Text("Start", fontWeight = FontWeight.Bold, color = Color.Black)
-            }
-        } else if (isLoading) {
-            Column(
-                modifier = Modifier.fillMaxWidth().padding(vertical = 32.dp),
-                horizontalAlignment = Alignment.CenterHorizontally,
-                verticalArrangement = Arrangement.spacedBy(16.dp),
-            ) {
-                CircularProgressIndicator(color = Gold)
-                Text(
-                    text = colorState.status_msg.ifEmpty { "Loading..." },
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = Gold,
-                )
-            }
-            Button(
-                onClick = { colorVm.stop() },
-                modifier = Modifier.fillMaxWidth(),
-                colors = ButtonDefaults.buttonColors(containerColor = StatusRed),
-            ) {
-                Text("Cancel", fontWeight = FontWeight.Bold, color = Color.White)
-            }
-        } else {
-            // ── Active states: stream + controls ──
-
+    if (!isIdle && !isLoading && status != "") {
+        // ── Active states: stream fills space, controls pinned at bottom ──
+        Box(modifier = modifier.fillMaxSize()) {
+            // Stream fills entire viewport
             TappableMjpegView(
                 url = streamUrl,
                 tappable = isStreaming || isPicking,
                 onTap = { x, y -> colorVm.clickColor(x, y) },
-                modifier = Modifier.fillMaxWidth(),
+                modifier = Modifier.fillMaxSize(),
             )
 
-            // Streaming prompt
-            if (isStreaming) {
+            // Status chip — top right
+            Box(modifier = Modifier.align(Alignment.TopEnd).padding(8.dp)) {
+                ColorStatusChip(status)
+            }
+
+            // Error — top left
+            if (error != null) {
                 Text(
-                    text = "Tap a color to pick",
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = Gold,
-                    modifier = Modifier.padding(vertical = 4.dp),
+                    text = "Error: $error",
+                    color = StatusRed,
+                    style = MaterialTheme.typography.bodySmall,
+                    modifier = Modifier.align(Alignment.TopStart).padding(8.dp),
                 )
             }
 
-            // Picking: show swatch + depth + confirm/re-pick
-            if (isPicking) {
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(12.dp),
-                ) {
-                    // Color swatch
-                    val rgb = colorState.picked_color
-                    val swatchColor = if (rgb != null && rgb.size == 3)
-                        Color(rgb[0], rgb[1], rgb[2])
-                    else Color.Gray
-                    Box(
-                        modifier = Modifier
-                            .size(36.dp)
-                            .background(swatchColor, RoundedCornerShape(6.dp))
-                            .border(1.dp, Color.White, RoundedCornerShape(6.dp)),
-                    )
-
-                    val depthText = if (colorState.target_depth != null)
-                        "%.2f m".format(colorState.target_depth!! / 1000f)
-                    else "no depth"
+            // ── Footer: pinned controls ──
+            Column(
+                modifier = Modifier
+                    .align(Alignment.BottomCenter)
+                    .fillMaxWidth()
+                    .background(MaterialTheme.colorScheme.surface.copy(alpha = 0.85f))
+                    .padding(horizontal = 8.dp, vertical = 8.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                // Streaming prompt
+                if (isStreaming) {
                     Text(
-                        text = "Depth: $depthText",
+                        text = "Tap a color to pick",
                         style = MaterialTheme.typography.bodyMedium,
-                        color = StatusGreen,
+                        color = Gold,
                     )
                 }
 
+                // Picking: swatch + depth + confirm/re-pick
+                if (isPicking) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(12.dp),
+                    ) {
+                        val rgb = colorState.picked_color
+                        val swatchColor = if (rgb != null && rgb.size == 3)
+                            Color(rgb[0], rgb[1], rgb[2])
+                        else Color.Gray
+                        Box(
+                            modifier = Modifier
+                                .size(36.dp)
+                                .background(swatchColor, RoundedCornerShape(6.dp))
+                                .border(1.dp, Color.White, RoundedCornerShape(6.dp)),
+                        )
+
+                        val depthText = if (colorState.target_depth != null)
+                            "%.2f m".format(colorState.target_depth!! / 1000f)
+                        else "no depth"
+                        Text(
+                            text = "Depth: $depthText",
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = StatusGreen,
+                        )
+                    }
+
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    ) {
+                        OutlinedButton(
+                            onClick = { colorVm.reset() },
+                            modifier = Modifier.weight(1f),
+                        ) {
+                            Text("Re-pick")
+                        }
+                        Button(
+                            onClick = { colorVm.confirm() },
+                            modifier = Modifier.weight(1f),
+                            colors = ButtonDefaults.buttonColors(containerColor = StatusGreen),
+                        ) {
+                            Text("Confirm", fontWeight = FontWeight.Bold, color = Color.Black)
+                        }
+                    }
+                }
+
+                // Stats row
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceEvenly,
+                ) {
+                    ColorStatLabel("Conf", "%.0f%%".format(colorState.confidence * 100))
+                    ColorStatLabel("FPS", "%.1f".format(colorState.fps))
+                    ColorStatLabel("Rot", "%.2f".format(colorState.rot_speed))
+                    ColorStatLabel("Vx", "%.2f".format(colorState.vx))
+                }
+
+                // Action buttons
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.spacedBy(8.dp),
@@ -187,46 +176,85 @@ fun ColorViewport(
                         onClick = { colorVm.reset() },
                         modifier = Modifier.weight(1f),
                     ) {
-                        Text("Re-pick")
+                        Text("Reset")
                     }
                     Button(
-                        onClick = { colorVm.confirm() },
+                        onClick = { colorVm.stop() },
                         modifier = Modifier.weight(1f),
-                        colors = ButtonDefaults.buttonColors(containerColor = StatusGreen),
+                        colors = ButtonDefaults.buttonColors(containerColor = StatusRed),
                     ) {
-                        Text("Confirm", fontWeight = FontWeight.Bold, color = Color.Black)
+                        Text("Stop", fontWeight = FontWeight.Bold, color = Color.White)
                     }
                 }
             }
-
-            // Stats row
+        }
+    } else {
+        // ── Idle / Loading states: scrollable column ──
+        Column(
+            modifier = modifier
+                .fillMaxSize()
+                .verticalScroll(rememberScrollState())
+                .padding(horizontal = 8.dp, vertical = 8.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp),
+        ) {
+            // ── Header ──
             Row(
                 modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceEvenly,
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically,
             ) {
-                ColorStatLabel("Conf", "%.0f%%".format(colorState.confidence * 100))
-                ColorStatLabel("FPS", "%.1f".format(colorState.fps))
-                ColorStatLabel("Rot", "%.2f".format(colorState.rot_speed))
-                ColorStatLabel("Vx", "%.2f".format(colorState.vx))
+                Text(
+                    text = "Color Tracking",
+                    style = MaterialTheme.typography.titleLarge,
+                    color = Gold,
+                )
+                ColorStatusChip(status)
             }
 
-            // Action buttons
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-            ) {
-                OutlinedButton(
-                    onClick = { colorVm.reset() },
-                    modifier = Modifier.weight(1f),
+            // ── Error ──
+            if (error != null) {
+                Text(
+                    text = "Error: $error",
+                    color = StatusRed,
+                    style = MaterialTheme.typography.bodySmall,
+                )
+            }
+
+            if (isIdle) {
+                // ── Mode selector ──
+                Text("Mode", style = MaterialTheme.typography.labelLarge, color = Gold)
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    ColorModeButton("Trace", activeMode == "trace") { setMode("trace") }
+                    ColorModeButton("Follow", activeMode == "follow") { setMode("follow") }
+                }
+
+                // ── Start button ──
+                Button(
+                    onClick = { colorVm.start(follow = activeMode == "follow") },
+                    modifier = Modifier.fillMaxWidth(),
+                    colors = ButtonDefaults.buttonColors(containerColor = Gold),
                 ) {
-                    Text("Reset")
+                    Text("Start", fontWeight = FontWeight.Bold, color = Color.Black)
+                }
+            } else if (isLoading) {
+                Column(
+                    modifier = Modifier.fillMaxWidth().padding(vertical = 32.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    verticalArrangement = Arrangement.spacedBy(16.dp),
+                ) {
+                    CircularProgressIndicator(color = Gold)
+                    Text(
+                        text = colorState.status_msg.ifEmpty { "Loading..." },
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = Gold,
+                    )
                 }
                 Button(
                     onClick = { colorVm.stop() },
-                    modifier = Modifier.weight(1f),
+                    modifier = Modifier.fillMaxWidth(),
                     colors = ButtonDefaults.buttonColors(containerColor = StatusRed),
                 ) {
-                    Text("Stop", fontWeight = FontWeight.Bold, color = Color.White)
+                    Text("Cancel", fontWeight = FontWeight.Bold, color = Color.White)
                 }
             }
         }

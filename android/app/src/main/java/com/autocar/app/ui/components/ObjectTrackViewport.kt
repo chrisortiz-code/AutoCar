@@ -73,97 +73,9 @@ fun ObjectTrackViewport(
     val isLoading = status == "loading"
     val isStreaming = status == "streaming"
 
-    Column(
-        modifier = modifier
-            .fillMaxSize()
-            .verticalScroll(rememberScrollState())
-            .padding(horizontal = 8.dp, vertical = 8.dp),
-        verticalArrangement = Arrangement.spacedBy(12.dp),
-    ) {
-        // ── Header ──
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Text(
-                text = "Object Tracking",
-                style = MaterialTheme.typography.titleLarge,
-                color = Gold,
-            )
-            TrackStatusChip(status)
-        }
-
-        // ── Error ──
-        if (error != null) {
-            Text(
-                text = "Error: $error",
-                color = StatusRed,
-                style = MaterialTheme.typography.bodySmall,
-            )
-        }
-
-        if (isIdle) {
-            // ── Mode selector ──
-            Text("Mode", style = MaterialTheme.typography.labelLarge, color = Gold)
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                TrackModeButton("Trace", activeMode == "trace") { setMode("trace") }
-                TrackModeButton("Follow", activeMode == "follow") { setMode("follow") }
-            }
-
-            // ── Backend selector ──
-            Text("Backend", style = MaterialTheme.typography.labelLarge, color = Gold)
-            val backends = listOf("orb", "akaze", "sift")
-            FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                backends.forEach { backend ->
-                    FilterChip(
-                        selected = activeBackend == backend,
-                        onClick = { setBackend(backend) },
-                        label = { Text(backend) },
-                        colors = FilterChipDefaults.filterChipColors(
-                            selectedContainerColor = GoldDark.copy(alpha = 0.3f),
-                            selectedLabelColor = Gold,
-                        ),
-                    )
-                }
-            }
-
-            // ── Start button ──
-            Button(
-                onClick = {
-                    trackVm.start(backend = activeBackend, follow = activeMode == "follow")
-                },
-                modifier = Modifier.fillMaxWidth(),
-                colors = ButtonDefaults.buttonColors(containerColor = Gold),
-            ) {
-                Text("Start", fontWeight = FontWeight.Bold, color = Color.Black)
-            }
-        } else if (isLoading) {
-            // ── Loading state ──
-            Column(
-                modifier = Modifier.fillMaxWidth().padding(vertical = 32.dp),
-                horizontalAlignment = Alignment.CenterHorizontally,
-                verticalArrangement = Arrangement.spacedBy(16.dp),
-            ) {
-                CircularProgressIndicator(color = Gold)
-                Text(
-                    text = trackState.status_msg.ifEmpty { "Loading..." },
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = Gold,
-                )
-            }
-
-            // Stop button during loading
-            Button(
-                onClick = { trackVm.stop() },
-                modifier = Modifier.fillMaxWidth(),
-                colors = ButtonDefaults.buttonColors(containerColor = StatusRed),
-            ) {
-                Text("Cancel", fontWeight = FontWeight.Bold, color = Color.White)
-            }
-        } else {
-            // ── Active states: stream + controls ──
-
+    if (!isIdle && !isLoading && status != "") {
+        // ── Active states: stream fills space, controls pinned at bottom ──
+        Box(modifier = modifier.fillMaxSize()) {
             // Stream with drag-to-select
             DraggableMjpegView(
                 url = streamUrl,
@@ -171,48 +83,162 @@ fun ObjectTrackViewport(
                 onBoxDrawn = { x1, y1, x2, y2 ->
                     trackVm.setReference(x1, y1, x2, y2)
                 },
-                modifier = Modifier.fillMaxWidth(),
+                modifier = Modifier.fillMaxSize(),
             )
 
-            // Prompt when no reference set
-            if (isStreaming) {
+            // Status chip — top right
+            Box(modifier = Modifier.align(Alignment.TopEnd).padding(8.dp)) {
+                TrackStatusChip(status)
+            }
+
+            // Error — top left
+            if (error != null) {
                 Text(
-                    text = "Draw a box around the target to track",
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = Gold,
-                    modifier = Modifier.padding(vertical = 4.dp),
+                    text = "Error: $error",
+                    color = StatusRed,
+                    style = MaterialTheme.typography.bodySmall,
+                    modifier = Modifier.align(Alignment.TopStart).padding(8.dp),
                 )
             }
 
-            // Stats row
+            // ── Footer: pinned controls ──
+            Column(
+                modifier = Modifier
+                    .align(Alignment.BottomCenter)
+                    .fillMaxWidth()
+                    .background(MaterialTheme.colorScheme.surface.copy(alpha = 0.85f))
+                    .padding(horizontal = 8.dp, vertical = 8.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                // Prompt when no reference set
+                if (isStreaming) {
+                    Text(
+                        text = "Draw a box around the target to track",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = Gold,
+                    )
+                }
+
+                // Stats row
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceEvenly,
+                ) {
+                    TrackStatLabel("Conf", "%.0f%%".format(trackState.confidence * 100))
+                    TrackStatLabel("FPS", "%.1f".format(trackState.fps))
+                    TrackStatLabel("Rot", "%.2f".format(trackState.rot_speed))
+                    TrackStatLabel("Vx", "%.2f".format(trackState.vx))
+                }
+
+                // Action buttons
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    OutlinedButton(
+                        onClick = { trackVm.reset() },
+                        modifier = Modifier.weight(1f),
+                    ) {
+                        Text("Reset")
+                    }
+
+                    Button(
+                        onClick = { trackVm.stop() },
+                        modifier = Modifier.weight(1f),
+                        colors = ButtonDefaults.buttonColors(containerColor = StatusRed),
+                    ) {
+                        Text("Stop", fontWeight = FontWeight.Bold, color = Color.White)
+                    }
+                }
+            }
+        }
+    } else {
+        // ── Idle / Loading states: scrollable column ──
+        Column(
+            modifier = modifier
+                .fillMaxSize()
+                .verticalScroll(rememberScrollState())
+                .padding(horizontal = 8.dp, vertical = 8.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp),
+        ) {
+            // ── Header ──
             Row(
                 modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceEvenly,
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically,
             ) {
-                TrackStatLabel("Conf", "%.0f%%".format(trackState.confidence * 100))
-                TrackStatLabel("FPS", "%.1f".format(trackState.fps))
-                TrackStatLabel("Rot", "%.2f".format(trackState.rot_speed))
-                TrackStatLabel("Vx", "%.2f".format(trackState.vx))
+                Text(
+                    text = "Object Tracking",
+                    style = MaterialTheme.typography.titleLarge,
+                    color = Gold,
+                )
+                TrackStatusChip(status)
             }
 
-            // Action buttons
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-            ) {
-                OutlinedButton(
-                    onClick = { trackVm.reset() },
-                    modifier = Modifier.weight(1f),
+            // ── Error ──
+            if (error != null) {
+                Text(
+                    text = "Error: $error",
+                    color = StatusRed,
+                    style = MaterialTheme.typography.bodySmall,
+                )
+            }
+
+            if (isIdle) {
+                // ── Mode selector ──
+                Text("Mode", style = MaterialTheme.typography.labelLarge, color = Gold)
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    TrackModeButton("Trace", activeMode == "trace") { setMode("trace") }
+                    TrackModeButton("Follow", activeMode == "follow") { setMode("follow") }
+                }
+
+                // ── Backend selector ──
+                Text("Backend", style = MaterialTheme.typography.labelLarge, color = Gold)
+                val backends = listOf("orb", "akaze", "sift")
+                FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    backends.forEach { backend ->
+                        FilterChip(
+                            selected = activeBackend == backend,
+                            onClick = { setBackend(backend) },
+                            label = { Text(backend) },
+                            colors = FilterChipDefaults.filterChipColors(
+                                selectedContainerColor = GoldDark.copy(alpha = 0.3f),
+                                selectedLabelColor = Gold,
+                            ),
+                        )
+                    }
+                }
+
+                // ── Start button ──
+                Button(
+                    onClick = {
+                        trackVm.start(backend = activeBackend, follow = activeMode == "follow")
+                    },
+                    modifier = Modifier.fillMaxWidth(),
+                    colors = ButtonDefaults.buttonColors(containerColor = Gold),
                 ) {
-                    Text("Reset")
+                    Text("Start", fontWeight = FontWeight.Bold, color = Color.Black)
+                }
+            } else if (isLoading) {
+                Column(
+                    modifier = Modifier.fillMaxWidth().padding(vertical = 32.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    verticalArrangement = Arrangement.spacedBy(16.dp),
+                ) {
+                    CircularProgressIndicator(color = Gold)
+                    Text(
+                        text = trackState.status_msg.ifEmpty { "Loading..." },
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = Gold,
+                    )
                 }
 
                 Button(
                     onClick = { trackVm.stop() },
-                    modifier = Modifier.weight(1f),
+                    modifier = Modifier.fillMaxWidth(),
                     colors = ButtonDefaults.buttonColors(containerColor = StatusRed),
                 ) {
-                    Text("Stop", fontWeight = FontWeight.Bold, color = Color.White)
+                    Text("Cancel", fontWeight = FontWeight.Bold, color = Color.White)
                 }
             }
         }

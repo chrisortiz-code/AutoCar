@@ -75,181 +75,206 @@ fun FaceViewport(
     val isSelecting = status == "selecting"
     val isConfirming = status == "confirming"
 
-    Column(
-        modifier = modifier
-            .fillMaxSize()
-            .verticalScroll(rememberScrollState())
-            .padding(horizontal = 8.dp, vertical = 8.dp),
-        verticalArrangement = Arrangement.spacedBy(12.dp),
-    ) {
-        // ── Header ──
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Text(
-                text = "Face Detection",
-                style = MaterialTheme.typography.titleLarge,
-                color = Gold,
-            )
-            StatusChip(status)
-        }
-
-        // ── Error ──
-        if (error != null) {
-            Text(
-                text = "Error: $error",
-                color = StatusRed,
-                style = MaterialTheme.typography.bodySmall,
-            )
-        }
-
-        if (isIdle) {
-            // ── Mode selector ──
-            Text("Mode", style = MaterialTheme.typography.labelLarge, color = Gold)
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                ModeButton("Trace", activeMode == "trace") { setMode("trace") }
-                ModeButton("Follow", activeMode == "follow") { setMode("follow") }
-            }
-
-            // ── Backend selector ──
-            Text("Backend", style = MaterialTheme.typography.labelLarge, color = Gold)
-            val backends = listOf("mediapipe", "yolo", "yunet", "scrfd")
-            FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                backends.forEach { backend ->
-                    FilterChip(
-                        selected = activeBackend == backend,
-                        onClick = { setBackend(backend) },
-                        label = { Text(backend) },
-                        colors = FilterChipDefaults.filterChipColors(
-                            selectedContainerColor = GoldDark.copy(alpha = 0.3f),
-                            selectedLabelColor = Gold,
-                        ),
-                    )
-                }
-            }
-
-            // ── Start button ──
-            Button(
-                onClick = {
-                    faceVm.start(
-                        backend = activeBackend,
-                        follow = activeMode == "follow",
-                    )
-                },
-                modifier = Modifier.fillMaxWidth(),
-                colors = ButtonDefaults.buttonColors(containerColor = Gold),
-            ) {
-                Text("Start", fontWeight = FontWeight.Bold, color = Color.Black)
-            }
-        } else if (isLoading) {
-            // ── Loading state ──
-            Column(
-                modifier = Modifier.fillMaxWidth().padding(vertical = 32.dp),
-                horizontalAlignment = Alignment.CenterHorizontally,
-                verticalArrangement = Arrangement.spacedBy(16.dp),
-            ) {
-                CircularProgressIndicator(color = Gold)
-                Text(
-                    text = faceState.status_msg.ifEmpty { "Loading..." },
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = Gold,
-                )
-            }
-
-            // Stop button during loading
-            Button(
-                onClick = { faceVm.stop() },
-                modifier = Modifier.fillMaxWidth(),
-                colors = ButtonDefaults.buttonColors(containerColor = StatusRed),
-            ) {
-                Text("Cancel", fontWeight = FontWeight.Bold, color = Color.White)
-            }
-        } else {
-            // ── Active states: stream + controls ──
-
-            // Stream
+    if (!isIdle && !isLoading && status != "") {
+        // ── Active states: stream fills space, controls pinned at bottom ──
+        Box(modifier = modifier.fillMaxSize()) {
+            // Stream fills entire viewport
             TappableMjpegView(
                 url = streamUrl,
                 tappable = isSelecting || isConfirming,
                 onTap = { x, y -> faceVm.clickFace(x, y) },
-                modifier = Modifier.fillMaxWidth(),
+                modifier = Modifier.fillMaxSize(),
             )
 
-            // Selecting prompt
-            if (isSelecting) {
+            // Status chip — top right
+            Box(modifier = Modifier.align(Alignment.TopEnd).padding(8.dp)) {
+                StatusChip(status)
+            }
+
+            // Error — top left
+            if (error != null) {
                 Text(
-                    text = "Tap a face to follow",
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = Gold,
-                    modifier = Modifier.padding(vertical = 4.dp),
+                    text = "Error: $error",
+                    color = StatusRed,
+                    style = MaterialTheme.typography.bodySmall,
+                    modifier = Modifier.align(Alignment.TopStart).padding(8.dp),
                 )
             }
 
-            // Confirming: show depth and confirm button
-            if (isConfirming) {
-                val depthText = if (faceState.target_depth != null)
-                    "%.2f m".format(faceState.target_depth!! / 1000f)
-                else "no depth"
+            // ── Footer: pinned controls ──
+            Column(
+                modifier = Modifier
+                    .align(Alignment.BottomCenter)
+                    .fillMaxWidth()
+                    .background(MaterialTheme.colorScheme.surface.copy(alpha = 0.85f))
+                    .padding(horizontal = 8.dp, vertical = 8.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                // Selecting prompt
+                if (isSelecting) {
+                    Text(
+                        text = "Tap a face to follow",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = Gold,
+                    )
+                }
 
-                Text(
-                    text = "Locked depth: $depthText",
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = StatusGreen,
-                    modifier = Modifier.padding(vertical = 4.dp),
-                )
+                // Confirming: show depth and confirm button
+                if (isConfirming) {
+                    val depthText = if (faceState.target_depth != null)
+                        "%.2f m".format(faceState.target_depth!! / 1000f)
+                    else "no depth"
 
+                    Text(
+                        text = "Locked depth: $depthText",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = StatusGreen,
+                    )
+
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    ) {
+                        OutlinedButton(
+                            onClick = { faceVm.clickFace(0f, 0f) },
+                            modifier = Modifier.weight(1f),
+                        ) {
+                            Text("Re-select")
+                        }
+
+                        Button(
+                            onClick = { faceVm.confirmFace() },
+                            modifier = Modifier.weight(1f),
+                            colors = ButtonDefaults.buttonColors(containerColor = StatusGreen),
+                        ) {
+                            Text("Confirm", fontWeight = FontWeight.Bold, color = Color.Black)
+                        }
+                    }
+                }
+
+                // Stats row
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceEvenly,
+                ) {
+                    StatLabel("FPS", "%.1f".format(faceState.fps))
+                    StatLabel("Faces", "${faceState.faces}")
+                    StatLabel("Rot", "%.2f".format(faceState.rot_speed))
+                    StatLabel("Vx", "%.2f".format(faceState.vx))
+                }
+
+                // Action buttons
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.spacedBy(8.dp),
                 ) {
                     OutlinedButton(
-                        onClick = { faceVm.clickFace(0f, 0f) },
+                        onClick = { faceVm.reset() },
                         modifier = Modifier.weight(1f),
                     ) {
-                        Text("Re-select")
+                        Text("Reset")
                     }
 
                     Button(
-                        onClick = { faceVm.confirmFace() },
+                        onClick = { faceVm.stop() },
                         modifier = Modifier.weight(1f),
-                        colors = ButtonDefaults.buttonColors(containerColor = StatusGreen),
+                        colors = ButtonDefaults.buttonColors(containerColor = StatusRed),
                     ) {
-                        Text("Confirm", fontWeight = FontWeight.Bold, color = Color.Black)
+                        Text("Stop", fontWeight = FontWeight.Bold, color = Color.White)
                     }
                 }
             }
-
-            // Stats row
+        }
+    } else {
+        // ── Idle / Loading states: scrollable column ──
+        Column(
+            modifier = modifier
+                .fillMaxSize()
+                .verticalScroll(rememberScrollState())
+                .padding(horizontal = 8.dp, vertical = 8.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp),
+        ) {
+            // ── Header ──
             Row(
                 modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceEvenly,
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically,
             ) {
-                StatLabel("FPS", "%.1f".format(faceState.fps))
-                StatLabel("Faces", "${faceState.faces}")
-                StatLabel("Rot", "%.2f".format(faceState.rot_speed))
-                StatLabel("Vx", "%.2f".format(faceState.vx))
+                Text(
+                    text = "Face Detection",
+                    style = MaterialTheme.typography.titleLarge,
+                    color = Gold,
+                )
+                StatusChip(status)
             }
 
-            // Action buttons
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-            ) {
-                OutlinedButton(
-                    onClick = { faceVm.reset() },
-                    modifier = Modifier.weight(1f),
+            // ── Error ──
+            if (error != null) {
+                Text(
+                    text = "Error: $error",
+                    color = StatusRed,
+                    style = MaterialTheme.typography.bodySmall,
+                )
+            }
+
+            if (isIdle) {
+                // ── Mode selector ──
+                Text("Mode", style = MaterialTheme.typography.labelLarge, color = Gold)
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    ModeButton("Trace", activeMode == "trace") { setMode("trace") }
+                    ModeButton("Follow", activeMode == "follow") { setMode("follow") }
+                }
+
+                // ── Backend selector ──
+                Text("Backend", style = MaterialTheme.typography.labelLarge, color = Gold)
+                val backends = listOf("mediapipe", "yolo", "yunet", "scrfd")
+                FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    backends.forEach { backend ->
+                        FilterChip(
+                            selected = activeBackend == backend,
+                            onClick = { setBackend(backend) },
+                            label = { Text(backend) },
+                            colors = FilterChipDefaults.filterChipColors(
+                                selectedContainerColor = GoldDark.copy(alpha = 0.3f),
+                                selectedLabelColor = Gold,
+                            ),
+                        )
+                    }
+                }
+
+                // ── Start button ──
+                Button(
+                    onClick = {
+                        faceVm.start(
+                            backend = activeBackend,
+                            follow = activeMode == "follow",
+                        )
+                    },
+                    modifier = Modifier.fillMaxWidth(),
+                    colors = ButtonDefaults.buttonColors(containerColor = Gold),
                 ) {
-                    Text("Reset")
+                    Text("Start", fontWeight = FontWeight.Bold, color = Color.Black)
+                }
+            } else if (isLoading) {
+                Column(
+                    modifier = Modifier.fillMaxWidth().padding(vertical = 32.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    verticalArrangement = Arrangement.spacedBy(16.dp),
+                ) {
+                    CircularProgressIndicator(color = Gold)
+                    Text(
+                        text = faceState.status_msg.ifEmpty { "Loading..." },
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = Gold,
+                    )
                 }
 
                 Button(
                     onClick = { faceVm.stop() },
-                    modifier = Modifier.weight(1f),
+                    modifier = Modifier.fillMaxWidth(),
                     colors = ButtonDefaults.buttonColors(containerColor = StatusRed),
                 ) {
-                    Text("Stop", fontWeight = FontWeight.Bold, color = Color.White)
+                    Text("Cancel", fontWeight = FontWeight.Bold, color = Color.White)
                 }
             }
         }
@@ -294,7 +319,7 @@ private fun ModeButton(label: String, selected: Boolean, onClick: () -> Unit) {
 @Composable
 private fun StatLabel(label: String, value: String) {
     Column(horizontalAlignment = Alignment.CenterHorizontally) {
-        Text(value, style = MaterialTheme.typography.titleMedium)
+        Text(value, style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.onSurface)
         Text(label, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
     }
 }

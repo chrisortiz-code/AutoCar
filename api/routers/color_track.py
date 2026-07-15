@@ -331,14 +331,10 @@ def _tracker_loop(follow_mode):
                                           rot_speed=0.0, vx=0.0)
                         last_control = now
 
-            # Status text
+            # Status text (only show critical overlay — UI handles idle/picking prompts)
             with _lock:
                 cur_status = _state["status"]
-            if cur_status == "streaming":
-                _draw_text(display, "Click a color to pick", (8, fh - 12), (0, 255, 255))
-            elif cur_status == "picking":
-                _draw_text(display, "Confirm to start tracking", (8, fh - 12), (0, 255, 255))
-            elif cur_status == "lost":
+            if cur_status == "lost":
                 _draw_text(display, "TARGET LOST", (8, fh - 12), (0, 0, 255))
 
             # Encode JPEG

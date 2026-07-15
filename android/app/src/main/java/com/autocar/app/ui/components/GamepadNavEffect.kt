@@ -81,7 +81,7 @@ fun GamepadNavEffect(
 ) {
     val tabs = NavTab.entries.toList()
     val faceBackends = listOf("mediapipe", "yolo", "yunet", "scrfd")
-    val trackBackends = listOf("orb", "akaze", "sift")
+    val trackBackends = listOf("orb", "akaze", "sift", "lightglue")
 
     // Keep references fresh inside the long-lived LaunchedEffect
     val curTab by rememberUpdatedState(currentTab)

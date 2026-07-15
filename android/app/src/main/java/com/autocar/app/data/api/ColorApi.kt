@@ -2,6 +2,7 @@ package com.autocar.app.data.api
 
 import com.autocar.app.data.model.ApiResult
 import com.autocar.app.data.model.ColorClickBody
+import com.autocar.app.data.model.ColorSensitivityBody
 import com.autocar.app.data.model.ColorStartBody
 import com.autocar.app.data.model.ColorState
 import retrofit2.http.Body
@@ -23,6 +24,9 @@ interface ColorApi {
 
     @POST("api/color/stop")
     suspend fun stop(): ApiResult
+
+    @POST("api/color/sensitivity")
+    suspend fun setSensitivity(@Body body: ColorSensitivityBody): ApiResult
 
     @GET("api/color/status")
     suspend fun status(): ColorState

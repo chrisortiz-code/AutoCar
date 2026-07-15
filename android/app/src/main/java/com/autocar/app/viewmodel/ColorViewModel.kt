@@ -6,6 +6,7 @@ import androidx.lifecycle.viewModelScope
 import com.autocar.app.data.api.ApiClient
 import com.autocar.app.data.api.ColorApi
 import com.autocar.app.data.model.ColorClickBody
+import com.autocar.app.data.model.ColorSensitivityBody
 import com.autocar.app.data.model.ColorStartBody
 import com.autocar.app.data.model.ColorState
 import com.autocar.app.data.settings.SettingsStore
@@ -109,6 +110,12 @@ class ColorViewModel(app: Application) : AndroidViewModel(app) {
         } catch (e: Exception) {
             _error.value = e.message
         }
+    }
+
+    fun setSensitivity(value: Int) = viewModelScope.launch {
+        try {
+            api().setSensitivity(ColorSensitivityBody(value))
+        } catch (_: Exception) { }
     }
 
     fun reset() = viewModelScope.launch {

@@ -194,7 +194,7 @@ fun ObjectTrackViewport(
 
                 // ── Backend selector ──
                 Text("Backend", style = MaterialTheme.typography.labelLarge, color = Gold)
-                val backends = listOf("orb", "akaze", "sift")
+                val backends = listOf("orb", "akaze", "sift", "lightglue")
                 FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     backends.forEach { backend ->
                         FilterChip(

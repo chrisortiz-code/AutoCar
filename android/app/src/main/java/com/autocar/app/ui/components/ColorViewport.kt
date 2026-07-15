@@ -18,6 +18,8 @@ import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.Slider
+import androidx.compose.material3.SliderDefaults
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
@@ -156,6 +158,34 @@ fun ColorViewport(
                     }
                 }
 
+                // Sensitivity slider
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    Text(
+                        text = "Sensitivity",
+                        style = MaterialTheme.typography.labelMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    Slider(
+                        value = colorState.sensitivity.toFloat(),
+                        onValueChange = { colorVm.setSensitivity(it.toInt()) },
+                        valueRange = 0f..100f,
+                        modifier = Modifier.weight(1f),
+                        colors = SliderDefaults.colors(
+                            thumbColor = Gold,
+                            activeTrackColor = Gold,
+                        ),
+                    )
+                    Text(
+                        text = "${colorState.sensitivity}",
+                        style = MaterialTheme.typography.labelMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+
                 // Stats row
                 Row(
                     modifier = Modifier.fillMaxWidth(),
@@ -226,6 +256,30 @@ fun ColorViewport(
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     ColorModeButton("Trace", activeMode == "trace") { setMode("trace") }
                     ColorModeButton("Follow", activeMode == "follow") { setMode("follow") }
+                }
+
+                // ── Sensitivity slider ──
+                Text("Sensitivity", style = MaterialTheme.typography.labelLarge, color = Gold)
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    Slider(
+                        value = colorState.sensitivity.toFloat(),
+                        onValueChange = { colorVm.setSensitivity(it.toInt()) },
+                        valueRange = 0f..100f,
+                        modifier = Modifier.weight(1f),
+                        colors = SliderDefaults.colors(
+                            thumbColor = Gold,
+                            activeTrackColor = Gold,
+                        ),
+                    )
+                    Text(
+                        text = "${colorState.sensitivity}",
+                        style = MaterialTheme.typography.labelMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
                 }
 
                 // ── Start button ──

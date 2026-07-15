@@ -13,6 +13,7 @@ data class ColorState(
     val target_depth: Int? = null,
     val current_depth: Int? = null,
     val fps: Float = 0f,
+    val sensitivity: Int = 50,
 )
 
 @Serializable
@@ -24,4 +25,9 @@ data class ColorStartBody(
 data class ColorClickBody(
     val x: Float,
     val y: Float,
+)
+
+@Serializable
+data class ColorSensitivityBody(
+    val value: Int,
 )

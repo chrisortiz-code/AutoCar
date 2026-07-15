@@ -52,9 +52,14 @@ def set_camera_reader(camera):
 
 
 # ── Configuration ─────────────────────────────────────────────────────
-HSV_TOL_H = 30
-HSV_TOL_S = 80
-HSV_TOL_V = 80
+_sensitivity = 50  # 0-100 slider, maps to HSV tolerances
+
+def _hsv_tols():
+    """Map 0-100 sensitivity to HSV tolerances. Higher = more tolerant."""
+    s = _sensitivity
+    h = int(10 + s * 0.40)      # 10..50
+    sv = int(30 + s * 1.00)     # 30..130
+    return h, sv, sv
 MIN_BLOB = 500
 SAMPLE_SIZE = 5
 
@@ -91,24 +96,25 @@ def _find_blob(frame_bgr, hsv_center):
     """Find the largest blob matching hsv_center. Returns (cx, cy, area, contour, mask) or None."""
     hsv = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2HSV)
     h, s, v = hsv_center
-    lo_s, hi_s = max(0, s - HSV_TOL_S), min(255, s + HSV_TOL_S)
-    lo_v, hi_v = max(0, v - HSV_TOL_V), min(255, v + HSV_TOL_V)
+    tol_h, tol_s, tol_v = _hsv_tols()
+    lo_s, hi_s = max(0, s - tol_s), min(255, s + tol_s)
+    lo_v, hi_v = max(0, v - tol_v), min(255, v + tol_v)
 
-    if h - HSV_TOL_H < 0:
+    if h - tol_h < 0:
         m1 = cv2.inRange(hsv, np.array([0, lo_s, lo_v]),
-                         np.array([h + HSV_TOL_H, hi_s, hi_v]))
-        m2 = cv2.inRange(hsv, np.array([180 + h - HSV_TOL_H, lo_s, lo_v]),
+                         np.array([h + tol_h, hi_s, hi_v]))
+        m2 = cv2.inRange(hsv, np.array([180 + h - tol_h, lo_s, lo_v]),
                          np.array([179, hi_s, hi_v]))
         mask = cv2.bitwise_or(m1, m2)
-    elif h + HSV_TOL_H > 179:
-        m1 = cv2.inRange(hsv, np.array([h - HSV_TOL_H, lo_s, lo_v]),
+    elif h + tol_h > 179:
+        m1 = cv2.inRange(hsv, np.array([h - tol_h, lo_s, lo_v]),
                          np.array([179, hi_s, hi_v]))
         m2 = cv2.inRange(hsv, np.array([0, lo_s, lo_v]),
-                         np.array([h + HSV_TOL_H - 180, hi_s, hi_v]))
+                         np.array([h + tol_h - 180, hi_s, hi_v]))
         mask = cv2.bitwise_or(m1, m2)
     else:
-        mask = cv2.inRange(hsv, np.array([h - HSV_TOL_H, lo_s, lo_v]),
-                           np.array([h + HSV_TOL_H, hi_s, hi_v]))
+        mask = cv2.inRange(hsv, np.array([h - tol_h, lo_s, lo_v]),
+                           np.array([h + tol_h, hi_s, hi_v]))
 
     mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, _MORPH_KERNEL)
     mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, _MORPH_KERNEL)
@@ -275,7 +281,8 @@ def _tracker_loop(follow_mode):
 
                 if result is not None:
                     bx, by, area, contour = result
-                    cv2.drawContours(display, [contour], -1, (0, 255, 0), 2)
+                    rx, ry, rw, rh = cv2.boundingRect(contour)
+                    cv2.rectangle(display, (rx, ry), (rx + rw, ry + rh), (0, 255, 0), 2)
                     cv2.circle(display, (bx, by), 5, (0, 0, 255), -1)
                     confidence = min(area / (fw * fh * 0.5), 1.0)
 
@@ -374,6 +381,10 @@ class ColorStartBody(BaseModel):
     follow: bool = True
 
 
+class ColorSensitivityBody(BaseModel):
+    value: int = Field(..., ge=0, le=100, description="Sensitivity 0-100")
+
+
 # ── Endpoints ─────────────────────────────────────────────────────────
 
 @router.post("/start")
@@ -418,10 +429,19 @@ def stop_color():
     return {"ok": True}
 
 
+@router.post("/sensitivity")
+def set_sensitivity(body: ColorSensitivityBody):
+    global _sensitivity
+    _sensitivity = body.value
+    return {"ok": True, "sensitivity": _sensitivity}
+
+
 @router.get("/status")
 def color_status():
     with _lock:
-        return dict(_state)
+        d = dict(_state)
+    d["sensitivity"] = _sensitivity
+    return d
 
 
 @stream_router.get("/stream")

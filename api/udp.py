@@ -28,7 +28,11 @@ MOTORS = {
     3: {"role": "FR", "dir": 1},
 }
 ALL_IDS = list(MOTORS.keys())
+DIFF_DRIVE_IDS = [0, 2]  # BL, BR
 MAX_VEL = 10.0  # turns/s
+
+# Diff-drive flag — set by api server at startup
+diff_drive = False
 
 # ── Physical constants ───────────────────────────────────────────────
 WHEEL_DIAMETER = 9.55       # cm (effective — tuned empirically)
@@ -72,7 +76,10 @@ def query_motor_status(timeout=0.3):
 
 
 def send_drive(vx, vy, trans_speed, rot_speed):
-    """Send a 'D' drive packet (mecanum mixing done by receiver)."""
+    """Send a 'D' drive packet (mecanum mixing done by receiver).
+    In diff-drive mode, vy is zeroed (no strafing with 2 wheels)."""
+    if diff_drive:
+        vy = 0.0
     print(f"[motor] D  vx={vx:+.2f} vy={vy:+.2f} spd={trans_speed:.2f} rot={rot_speed:+.2f}")
     _udp_sock.sendto(
         b"D" + struct.pack("<ffff", vx, vy, trans_speed, rot_speed), _udp_dest
@@ -110,6 +117,23 @@ def mecanum_speeds(vx, vy, omega):
         "BR": vx - vy - omega,
     }
     return {nid: roles[m["role"]] for nid, m in MOTORS.items()}
+
+
+def differential_speeds(vx, omega):
+    """Back-two-wheel differential drive. Returns {0: BL, 2: BR}."""
+    return {0: vx + omega, 2: vx - omega}
+
+
+def _active_speeds(vx, vy, omega):
+    """Return wheel speeds dict appropriate for current drive mode."""
+    if diff_drive:
+        return differential_speeds(vx, omega)
+    return mecanum_speeds(vx, vy, omega)
+
+
+def _active_ids():
+    """Return the list of active motor node IDs."""
+    return DIFF_DRIVE_IDS if diff_drive else ALL_IDS
 
 
 # ── Time-based moves ─────────────────────────────────────────────────
@@ -177,9 +201,10 @@ def run_translate_rotate(distance_cm, heading_deg, rotation_deg, vel_pct,
     # Pure rotation
     if magnitude < 0.01 and rot_turns > 0.01:
         rot_sign = 1.0 if rotation_deg >= 0 else -1.0
-        rot_unit = mecanum_speeds(0, 0, rot_sign)
+        rot_unit = _active_speeds(0, 0, rot_sign)
         max_r = max(abs(s) for s in rot_unit.values()) or 1.0
-        targets = {nid: rot_unit[nid] / max_r * rot_turns for nid in ALL_IDS}
+        ids = _active_ids()
+        targets = {nid: rot_unit[nid] / max_r * rot_turns for nid in ids}
         run_move(targets, vel_pct, abort_event)
         return
 
@@ -199,7 +224,8 @@ def run_translate_rotate(distance_cm, heading_deg, rotation_deg, vel_pct,
     vx_world = math.cos(theta_world)
     vy_world = math.sin(theta_world)
 
-    rot_unit = mecanum_speeds(0, 0, rot_sign)
+    ids = _active_ids()
+    rot_unit = _active_speeds(0, 0, rot_sign)
     max_r = max(abs(s) for s in rot_unit.values()) or 1.0
 
     dt = 0.02
@@ -235,13 +261,13 @@ def run_translate_rotate(distance_cm, heading_deg, rotation_deg, vel_pct,
             vx_body = cos_t * vx_world + sin_t * vy_world
             vy_body = -sin_t * vx_world + cos_t * vy_world
 
-            trans_unit = mecanum_speeds(vx_body, vy_body, 0)
+            trans_unit = _active_speeds(vx_body, vy_body, 0)
             max_t = max(abs(s) for s in trans_unit.values()) or 1.0
 
             wheel_vels = {
                 nid: (trans_unit[nid] / max_t) * trans_rate * ramp
                    + (rot_unit[nid] / max_r) * rot_rate * ramp
-                for nid in ALL_IDS
+                for nid in ids
             }
             send_wheels(wheel_vels)
             time.sleep(dt)

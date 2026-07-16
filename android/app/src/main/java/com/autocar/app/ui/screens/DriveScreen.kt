@@ -1,5 +1,8 @@
 package com.autocar.app.ui.screens
 
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.gestures.detectDragGestures
@@ -15,8 +18,10 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.SportsEsports
 import androidx.compose.material.icons.filled.Stop
 import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material3.Button
@@ -40,8 +45,12 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.StrokeCap
+import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.autocar.app.data.gamepad.GamepadManager
 import com.autocar.app.ui.components.GamepadOverlay
@@ -63,6 +72,8 @@ fun DriveScreen(
     val gamepadState by gamepadManager.state.collectAsState()
     val driveStatus by driveVm.driveStatus.collectAsState()
     val sensorUpdate by sensorsVm.sensorUpdate.collectAsState()
+    val gamepadDriving by driveVm.gamepadDriving.collectAsState()
+    val r3HoldProgress by driveVm.r3HoldProgress.collectAsState()
 
     var touchVx by remember { mutableFloatStateOf(0f) }
     var touchVy by remember { mutableFloatStateOf(0f) }
@@ -76,10 +87,11 @@ fun DriveScreen(
 
     DisposableEffect(Unit) {
         onDispose {
-            driveVm.sendStop()
+            driveVm.deactivateGamepadDriving()
         }
     }
 
+    Box(modifier = Modifier.fillMaxSize()) {
     Column(
         modifier = Modifier
             .fillMaxSize()
@@ -88,6 +100,44 @@ fun DriveScreen(
         verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
         Text("Drive Control", style = MaterialTheme.typography.headlineLarge, color = Gold)
+
+        // Controller drive status banner
+        AnimatedVisibility(
+            visible = gamepadDriving,
+            enter = fadeIn(),
+            exit = fadeOut(),
+        ) {
+            Surface(
+                color = StatusGreen.copy(alpha = 0.15f),
+                shape = RoundedCornerShape(8.dp),
+            ) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 12.dp, vertical = 8.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.Center,
+                ) {
+                    Icon(
+                        Icons.Default.SportsEsports,
+                        contentDescription = null,
+                        tint = StatusGreen,
+                        modifier = Modifier.size(18.dp),
+                    )
+                    Text(
+                        "  Controller Drive Active",
+                        color = StatusGreen,
+                        fontWeight = FontWeight.Bold,
+                        style = MaterialTheme.typography.bodyMedium,
+                    )
+                    Text(
+                        "  —  tap R3 to stop",
+                        color = StatusGreen.copy(alpha = 0.7f),
+                        style = MaterialTheme.typography.bodySmall,
+                    )
+                }
+            }
+        }
 
         // Compact motor status bar
         sensorUpdate.motors?.let { motorsData ->
@@ -133,7 +183,9 @@ fun DriveScreen(
             }
         }
 
-        GamepadOverlay(state = gamepadState)
+        if (gamepadDriving) {
+            GamepadOverlay(state = gamepadState)
+        }
 
         Text(
             text = if (driveStatus.moving) "Status: Moving" else "Status: Idle",
@@ -249,5 +301,61 @@ fun DriveScreen(
                 Text(" E-STOP", modifier = Modifier.padding(start = 4.dp), color = Color.White)
             }
         }
+    } // end Column
+
+    // R3 hold countdown overlay
+    AnimatedVisibility(
+        visible = r3HoldProgress > 0f && !gamepadDriving,
+        enter = fadeIn(),
+        exit = fadeOut(),
+        modifier = Modifier.fillMaxSize(),
+    ) {
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .background(Color.Black.copy(alpha = 0.6f)),
+            contentAlignment = Alignment.Center,
+        ) {
+            // Countdown ring
+            Canvas(modifier = Modifier.size(120.dp)) {
+                // Background ring
+                drawArc(
+                    color = GoldDark.copy(alpha = 0.4f),
+                    startAngle = -90f,
+                    sweepAngle = 360f,
+                    useCenter = false,
+                    style = Stroke(width = 8.dp.toPx(), cap = StrokeCap.Round),
+                )
+                // Progress ring
+                drawArc(
+                    color = Gold,
+                    startAngle = -90f,
+                    sweepAngle = r3HoldProgress * 360f,
+                    useCenter = false,
+                    style = Stroke(width = 8.dp.toPx(), cap = StrokeCap.Round),
+                )
+            }
+            Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                Icon(
+                    Icons.Default.SportsEsports,
+                    contentDescription = null,
+                    tint = Gold,
+                    modifier = Modifier.size(32.dp),
+                )
+                Spacer(Modifier.height(8.dp))
+                Text(
+                    "Hold R3",
+                    color = Gold,
+                    fontWeight = FontWeight.Bold,
+                    fontSize = 16.sp,
+                )
+                Text(
+                    "${((1f - r3HoldProgress) * 5).toInt() + 1}s",
+                    color = Gold.copy(alpha = 0.7f),
+                    fontSize = 14.sp,
+                )
+            }
+        }
     }
+    } // end Box
 }

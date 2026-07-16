@@ -29,7 +29,19 @@
       "Bash(curl:*)",
       "Bash(echo ===:*)",
       "Bash(./gradlew assembleDebug:*)",
-      "Bash(ls:*)"
+      "Bash(ls:*)",
+      "WebFetch(domain:bucket-download.slamtec.com)",
+      "WebFetch(domain:wiki.slamtec.com)",
+      "WebFetch(domain:raw.githubusercontent.com)",
+      "Bash(grep AUTOBAUD_MAGICBYTE:*)",
+      "WebFetch(domain:www.slamtec.ai)",
+      "WebFetch(domain:www.slamtec.com)",
+      "Bash(./gradlew compileDebugKotlin:*)",
+      "Bash(rm:*)",
+      "Bash(read commit:*)",
+      "Bash(find:*)",
+      "WebFetch(domain:docs.odriverobotics.com)",
+      "mcp__ide__getDiagnostics"
     ]
   }
 }

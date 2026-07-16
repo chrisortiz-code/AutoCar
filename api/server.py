@@ -45,6 +45,7 @@ from api.routers.face import router as face_router, stream_router as face_stream
 from api.routers.object_track import router as track_router, stream_router as track_stream_router
 from api.routers.color_track import router as color_router, stream_router as color_stream_router
 from api.routers.obstacles import router as obstacles_router, stream_router as obstacles_stream_router
+from api.routers.rl_track import router as rl_router, stream_router as rl_stream_router
 from api.routers.viewers import router as viewers_router
 
 app.include_router(drive_router)
@@ -59,6 +60,8 @@ app.include_router(color_router)
 app.include_router(color_stream_router)
 app.include_router(obstacles_router)
 app.include_router(obstacles_stream_router)
+app.include_router(rl_router)
+app.include_router(rl_stream_router)
 app.include_router(viewers_router)
 
 
@@ -75,6 +78,7 @@ def root():
             "face": "/api/face",
             "track": "/api/track",
             "color": "/api/color",
+            "rl": "/api/rl",
             "obstacles": "/api/obstacles",
             "websocket": "/api/ws/sensors",
             "dashboard": "/viewer/dashboard",
@@ -85,11 +89,17 @@ def root():
 
 # ── Startup / shutdown ────────────────────────────────────────────────
 
-def configure(*, demo=False, no_camera=False, no_lidar=False, cam_width=848, cam_height=480, cam_fps=30, scan_mode=0):
+def configure(*, demo=False, no_camera=False, no_lidar=False, cam_width=848, cam_height=480, cam_fps=30, scan_mode=0, diff_drive=False):
     """Configure sensor readers before server starts.
 
     Called from __main__.py with CLI flags.
     """
+    if diff_drive:
+        import api.udp as udp_mod
+        udp_mod.diff_drive = True
+        print("Drive mode: DIFFERENTIAL (back 2 motors only)")
+    else:
+        print("Drive mode: mecanum (all 4 motors)")
     from api.routers.sensors import set_readers
     from api.routers.paths import start_udp_relay
 
@@ -142,6 +152,12 @@ def configure(*, demo=False, no_camera=False, no_lidar=False, cam_width=848, cam
         set_color_camera(camera)
         from api.routers.obstacles import set_camera_reader as set_obstacles_camera
         set_obstacles_camera(camera)
+        from api.routers.rl_track import set_camera_reader as set_rl_camera
+        set_rl_camera(camera)
+
+    if lidar:
+        from api.routers.rl_track import set_lidar_reader as set_rl_lidar
+        set_rl_lidar(lidar)
 
     # Store refs for cleanup
     app.state.camera = camera

@@ -23,6 +23,7 @@ class DriveViewModel(app: Application) : AndroidViewModel(app) {
         private const val MAX_TRANS_SPEED = 8f
         private const val MAX_ROT_SPEED = 3f
         private const val SEND_INTERVAL_MS = 50L // 20 Hz
+        const val R3_HOLD_DURATION_MS = 5000L
     }
 
     private val store = SettingsStore(app)
@@ -34,6 +35,29 @@ class DriveViewModel(app: Application) : AndroidViewModel(app) {
 
     private val _wsConnected = MutableStateFlow(false)
     val wsConnected: StateFlow<Boolean> = _wsConnected.asStateFlow()
+
+    /** Whether the gamepad is actively driving motors. */
+    private val _gamepadDriving = MutableStateFlow(false)
+    val gamepadDriving: StateFlow<Boolean> = _gamepadDriving.asStateFlow()
+
+    /** 0f..1f progress of R3 hold countdown. */
+    private val _r3HoldProgress = MutableStateFlow(0f)
+    val r3HoldProgress: StateFlow<Float> = _r3HoldProgress.asStateFlow()
+
+    fun activateGamepadDriving() {
+        _gamepadDriving.value = true
+        _r3HoldProgress.value = 0f
+    }
+
+    fun deactivateGamepadDriving() {
+        _gamepadDriving.value = false
+        _r3HoldProgress.value = 0f
+        sensorSocket?.sendStop()
+    }
+
+    fun updateR3HoldProgress(progress: Float) {
+        _r3HoldProgress.value = progress
+    }
 
     fun connectWebSocket() = viewModelScope.launch {
         val baseUrl = store.baseUrl.first()
@@ -68,6 +92,16 @@ class DriveViewModel(app: Application) : AndroidViewModel(app) {
             var prevSending = false
             while (true) {
                 delay(SEND_INTERVAL_MS)
+
+                // Only send motor commands when controller drive is active
+                if (!_gamepadDriving.value) {
+                    if (prevSending) {
+                        sensorSocket?.sendStop()
+                        prevSending = false
+                    }
+                    continue
+                }
+
                 val state = gamepadManager.state.value
                 if (!state.connected) continue
 

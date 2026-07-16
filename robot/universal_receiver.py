@@ -3,9 +3,10 @@ Universal UDP receiver -> CAN motor control (runs on Jetson).
 Listens for drive packets from PS4, camera tracking, GUI, or any sender using
 the shared D/S/E/Q packet format.
 
-Usage:  python universal_receiver.py
+Usage:  python universal_receiver.py [--diff-drive]
 """
 
+import argparse
 import json
 import signal
 import socket
@@ -74,7 +75,15 @@ def _status_responder(mc, driving_ref):
 
 
 def main():
-    mc = MecanumCAN(current_limit=30.0)
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--diff-drive", action="store_true",
+                        help="Differential drive mode: back two motors only (BL, BR)")
+    args = parser.parse_args()
+
+    if args.diff_drive:
+        print("=== DIFFERENTIAL DRIVE MODE (BL + BR only) ===\n")
+
+    mc = MecanumCAN(current_limit=30.0, diff_drive=args.diff_drive)
 
     recovery_lock = threading.Lock()
 
@@ -173,7 +182,8 @@ def main():
                 # Per-wheel velocity: 4 floats in node-ID order (0,1,2,3)
                 vels = struct.unpack("<ffff", data[1:17])
                 for nid, vel in enumerate(vels):
-                    mc.set_vel(nid, vel)
+                    if nid in mc.active_ids:
+                        mc.set_vel(nid, vel)
                 if not driving:
                     print(f"Driving per-wheel (from {addr[0]})")
                 driving = True

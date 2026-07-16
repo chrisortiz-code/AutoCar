@@ -40,6 +40,15 @@ class SettingsViewModel(app: Application) : AndroidViewModel(app) {
     fun setToken(value: String) = viewModelScope.launch { store.setToken(value) }
     fun setLayoutMode(value: String) = viewModelScope.launch { store.setLayoutMode(value) }
 
+    val sshUsername: StateFlow<String> = store.sshUsername
+        .stateIn(viewModelScope, SharingStarted.Eagerly, SettingsStore.DEFAULT_SSH_USERNAME)
+
+    val sshPassword: StateFlow<String> = store.sshPassword
+        .stateIn(viewModelScope, SharingStarted.Eagerly, SettingsStore.DEFAULT_SSH_PASSWORD)
+
+    fun setSshUsername(value: String) = viewModelScope.launch { store.setSshUsername(value) }
+    fun setSshPassword(value: String) = viewModelScope.launch { store.setSshPassword(value) }
+
     fun checkConnection() = viewModelScope.launch {
         try {
             val url = baseUrl.value

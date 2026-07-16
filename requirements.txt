@@ -12,3 +12,4 @@ pyrealsense2
 fastapi
 uvicorn[standard]
 websockets
+scm-lightglue

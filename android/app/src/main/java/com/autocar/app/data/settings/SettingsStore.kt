@@ -23,6 +23,11 @@ class SettingsStore(private val context: Context) {
         const val DEFAULT_HOST = "192.168.2.83"
         const val DEFAULT_PORT = 8080
         const val DEFAULT_LAYOUT_MODE = "grid"
+        const val DEFAULT_SSH_USERNAME = "jamesortiz17"
+        const val DEFAULT_SSH_PASSWORD = ""
+
+        private val SSH_USERNAME = stringPreferencesKey("ssh_username")
+        private val SSH_PASSWORD = stringPreferencesKey("ssh_password")
     }
 
     val host: Flow<String> = context.dataStore.data.map { it[HOST] ?: DEFAULT_HOST }
@@ -50,5 +55,16 @@ class SettingsStore(private val context: Context) {
 
     suspend fun setLayoutMode(value: String) {
         context.dataStore.edit { it[LAYOUT_MODE] = value }
+    }
+
+    val sshUsername: Flow<String> = context.dataStore.data.map { it[SSH_USERNAME] ?: DEFAULT_SSH_USERNAME }
+    val sshPassword: Flow<String> = context.dataStore.data.map { it[SSH_PASSWORD] ?: DEFAULT_SSH_PASSWORD }
+
+    suspend fun setSshUsername(value: String) {
+        context.dataStore.edit { it[SSH_USERNAME] = value }
+    }
+
+    suspend fun setSshPassword(value: String) {
+        context.dataStore.edit { it[SSH_PASSWORD] = value }
     }
 }

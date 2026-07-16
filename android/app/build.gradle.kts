@@ -36,6 +36,16 @@ android {
     buildFeatures {
         compose = true
     }
+
+    packaging {
+        resources {
+            excludes += listOf(
+                "META-INF/versions/9/OSGI-INF/MANIFEST.MF",
+                "META-INF/NOTICE",
+                "META-INF/LICENSE",
+            )
+        }
+    }
 }
 
 dependencies {
@@ -72,4 +82,8 @@ dependencies {
 
     // Icons extended (for Material icons)
     implementation("androidx.compose.material:material-icons-extended")
+
+    // SSH
+    implementation("com.hierynomus:sshj:0.38.0")
+    implementation("org.bouncycastle:bcprov-jdk18on:1.78.1")
 }

@@ -104,13 +104,52 @@ fun GamepadNavEffect(
 
     LaunchedEffect(Unit) {
         var prevButtons = emptySet<Int>()
+        var r3PressStartMs = 0L      // when R3 was first held
+        var r3Activated = false       // true once the 5s hold fires (prevent re-fire)
         Log.d(TAG, "GamepadNavEffect polling started")
         while (true) {
             delay(POLL_MS)
             val state = gamepadManager.state.value
             if (!state.connected) {
                 prevButtons = emptySet()
+                r3PressStartMs = 0L
+                r3Activated = false
+                driveVm.updateR3HoldProgress(0f)
                 continue
+            }
+
+            // ── R3 hold / tap detection (runs every tick, not edge-only) ──
+            val r3Held = KeyEvent.KEYCODE_BUTTON_THUMBR in state.buttons
+            val r3JustPressed = KeyEvent.KEYCODE_BUTTON_THUMBR in (state.buttons - prevButtons)
+            val r3JustReleased = KeyEvent.KEYCODE_BUTTON_THUMBR in (prevButtons - state.buttons)
+            val driving = driveVm.gamepadDriving.value
+
+            if (r3JustPressed) {
+                r3PressStartMs = System.currentTimeMillis()
+                r3Activated = false
+            }
+
+            if (r3Held && !driving && r3PressStartMs > 0L && !r3Activated) {
+                val elapsed = System.currentTimeMillis() - r3PressStartMs
+                val progress = (elapsed.toFloat() / DriveViewModel.R3_HOLD_DURATION_MS).coerceIn(0f, 1f)
+                driveVm.updateR3HoldProgress(progress)
+                if (elapsed >= DriveViewModel.R3_HOLD_DURATION_MS) {
+                    driveVm.activateGamepadDriving()
+                    r3Activated = true
+                    Log.d(TAG, "R3 hold complete — controller drive ACTIVATED")
+                }
+            }
+
+            if (r3JustReleased) {
+                if (driving && !r3Activated) {
+                    // Quick tap while driving → deactivate
+                    driveVm.deactivateGamepadDriving()
+                    Log.d(TAG, "R3 tap — controller drive DEACTIVATED")
+                }
+                // Reset hold state
+                r3PressStartMs = 0L
+                r3Activated = false
+                driveVm.updateR3HoldProgress(0f)
             }
 
             val newPresses = state.buttons - prevButtons
@@ -125,6 +164,9 @@ fun GamepadNavEffect(
 
             for (button in newPresses) {
                 when (button) {
+                    // ── R3 handled above ──
+                    KeyEvent.KEYCODE_BUTTON_THUMBR -> {}
+
                     // ── Global: L3 (left stick click) = cycle UI scale ──
                     KeyEvent.KEYCODE_BUTTON_THUMBL -> curOnScaleCycle()
 
@@ -399,6 +441,9 @@ private fun ControlsContent(currentTab: NavTab) {
                 ControlRow("Circle", "Reset tracker")
             }
             NavTab.Drive -> {
+                ControlRow("R3 hold 5s", "Activate driving")
+                ControlRow("R3 tap", "Deactivate driving")
+                SectionLabel("Active")
                 ControlRow("L stick", "Move")
                 ControlRow("R stick", "Rotate")
                 ControlRow("R2", "Speed")
@@ -410,7 +455,7 @@ private fun ControlsContent(currentTab: NavTab) {
                 ControlRow("Cross", "Execute")
                 ControlRow("Circle", "Stop")
             }
-            NavTab.Dashboard -> {
+            NavTab.Config -> {
                 Text(
                     "No specific controls",
                     style = MaterialTheme.typography.bodySmall,

@@ -46,11 +46,17 @@ MOVE_TIMEOUT       = 30
 RAMP_PCT           = 0.15
 
 
+DIFF_DRIVE_IDS = [1, 3]  # FL, FR — front two motors only
+
+
 class MecanumCAN:
-    def __init__(self, max_vel=MAX_VEL, current_limit=CURRENT_LIMIT):
+    def __init__(self, max_vel=MAX_VEL, current_limit=CURRENT_LIMIT,
+                 diff_drive=False):
         self.bus = None
         self.armed = set()
         self.connected = set()
+        self.diff_drive = diff_drive
+        self.active_ids = DIFF_DRIVE_IDS if diff_drive else ALL_IDS
         self.positions = {nid: 0.0 for nid in ALL_IDS}
         self.currents = {nid: 0.0 for nid in ALL_IDS}
         self.errors = {nid: 0 for nid in ALL_IDS}
@@ -131,6 +137,7 @@ class MecanumCAN:
         time.sleep(0.3)
 
     def _scan_for_odrives(self, attempts=SCAN_ATTEMPTS):
+        expect_count = len(self.active_ids)
         for attempt in range(attempts):
             print(f"Scanning for ODrives (attempt {attempt+1}/{attempts})...")
             start = time.time()
@@ -146,7 +153,7 @@ class MecanumCAN:
                         # Accept heartbeats OR probe responses
                         if cmd_id in (CMD_HEARTBEAT, CMD_ENCODER_EST, CMD_GET_IQ):
                             self._remember_node(node_id)
-                if len(self.connected) == len(ALL_IDS):
+                if len(self.connected) >= expect_count:
                     break
             if self.connected:
                 break
@@ -294,7 +301,8 @@ class MecanumCAN:
 
     def arm_all(self):
         for nid in self.connected:
-            self.arm(nid)
+            if nid in self.active_ids:
+                self.arm(nid)
 
     def set_vel(self, node_id, velocity):
         if node_id not in self.connected:
@@ -315,7 +323,7 @@ class MecanumCAN:
 
     def zero_vel(self):
         """Set all velocities to zero without disarming."""
-        for nid in ALL_IDS:
+        for nid in self.active_ids:
             if nid in self.connected:
                 self.set_vel(nid, 0.0)
 
@@ -345,8 +353,40 @@ class MecanumCAN:
         }
         return {nid: roles[m["role"]] for nid, m in MOTORS.items()}
 
+    @staticmethod
+    def differential_speeds(vx, omega):
+        """Back-two-wheel differential drive. vy is ignored.
+        BL(0) = vx + omega, BR(2) = vx - omega."""
+        return {0: vx + omega, 2: vx - omega}
+
     def drive(self, vx, vy, trans_speed, rot_speed):
         """Translate + rotate independently, then add per wheel."""
+        if self.diff_drive:
+            self._drive_diff(vx, trans_speed, rot_speed)
+        else:
+            self._drive_mecanum(vx, vy, trans_speed, rot_speed)
+
+    def _drive_diff(self, vx, trans_speed, rot_speed):
+        """Differential drive: forward/back + rotation on BL/BR only."""
+        trans = {0: 0.0, 2: 0.0}
+        if trans_speed > 0.01:
+            raw = self.differential_speeds(vx, 0)
+            max_t = max(abs(v) for v in raw.values()) or 1.0
+            trans = {nid: (raw[nid] / max_t) * trans_speed for nid in DIFF_DRIVE_IDS}
+
+        rot = {0: 0.0, 2: 0.0}
+        if abs(rot_speed) > 0.01:
+            raw = self.differential_speeds(0, 1.0)
+            max_r = max(abs(v) for v in raw.values()) or 1.0
+            rot = {nid: (raw[nid] / max_r) * rot_speed for nid in DIFF_DRIVE_IDS}
+
+        for nid in DIFF_DRIVE_IDS:
+            vel = trans[nid] + rot[nid]
+            vel = max(-self.max_vel, min(self.max_vel, vel))
+            self.set_vel(nid, vel)
+
+    def _drive_mecanum(self, vx, vy, trans_speed, rot_speed):
+        """Full 4-wheel mecanum drive."""
         # Translation
         trans = {nid: 0.0 for nid in ALL_IDS}
         if trans_speed > 0.01:
@@ -371,7 +411,7 @@ class MecanumCAN:
     def status_line(self):
         """One-line status: position and current per motor."""
         parts = []
-        for nid in sorted(ALL_IDS):
+        for nid in sorted(self.active_ids):
             role = MOTORS[nid]["role"]
             pos = self.positions.get(nid, 0)
             amps = self.currents.get(nid, 0)

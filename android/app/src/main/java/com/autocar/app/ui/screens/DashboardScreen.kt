@@ -20,6 +20,7 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Bluetooth
@@ -227,10 +228,14 @@ private fun SettingsDropdown(
     val host by settingsVm.host.collectAsState()
     val port by settingsVm.port.collectAsState()
     val token by settingsVm.token.collectAsState()
+    val sshUsername by settingsVm.sshUsername.collectAsState()
+    val sshPassword by settingsVm.sshPassword.collectAsState()
 
     var editHost by remember(host) { mutableStateOf(host) }
     var editPort by remember(port) { mutableStateOf(port.toString()) }
     var editToken by remember(token) { mutableStateOf(token) }
+    var editSshUsername by remember(sshUsername) { mutableStateOf(sshUsername) }
+    var editSshPassword by remember(sshPassword) { mutableStateOf(sshPassword) }
 
     var saving by remember { mutableStateOf(false) }
     var saveResult by remember { mutableStateOf<Boolean?>(null) }
@@ -336,6 +341,27 @@ private fun SettingsDropdown(
                     modifier = Modifier.fillMaxWidth(),
                 )
 
+                HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+                Text("SSH Credentials", style = MaterialTheme.typography.bodyLarge, color = Gold)
+
+                OutlinedTextField(
+                    value = editSshUsername,
+                    onValueChange = { editSshUsername = it },
+                    label = { Text("SSH Username") },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth(),
+                )
+
+                OutlinedTextField(
+                    value = editSshPassword,
+                    onValueChange = { editSshPassword = it },
+                    label = { Text("SSH Password") },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth(),
+                    visualTransformation = PasswordVisualTransformation(),
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
+                )
+
                 Button(
                     onClick = {
                         saving = true
@@ -343,6 +369,8 @@ private fun SettingsDropdown(
                         settingsVm.setHost(editHost.trim())
                         editPort.trim().toIntOrNull()?.let { settingsVm.setPort(it) }
                         settingsVm.setToken(editToken.trim())
+                        settingsVm.setSshUsername(editSshUsername.trim())
+                        settingsVm.setSshPassword(editSshPassword)
                         settingsVm.checkConnection()
                     },
                     modifier = Modifier.fillMaxWidth(),

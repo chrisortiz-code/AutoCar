@@ -11,6 +11,7 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -21,13 +22,13 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Close
-import androidx.compose.material.icons.filled.Dashboard
 import androidx.compose.material.icons.filled.Face
 import androidx.compose.material.icons.filled.Gamepad
 import androidx.compose.material.icons.filled.Route
 import androidx.compose.material.icons.filled.CenterFocusStrong
 import androidx.compose.material.icons.filled.Palette
 import androidx.compose.material.icons.filled.Sensors
+import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.SportsEsports
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -69,7 +70,9 @@ import com.autocar.app.ui.components.GamepadNavEffect
 import com.autocar.app.ui.components.LidarPolarPlot
 import com.autocar.app.ui.components.MjpegView
 import com.autocar.app.ui.components.ColorViewport
+import com.autocar.app.ui.components.ConfigViewport
 import com.autocar.app.ui.components.ObjectTrackViewport
+import com.autocar.app.ui.components.TerminalViewport
 import com.autocar.app.ui.components.SensorViewport
 import com.autocar.app.ui.components.SidePanel
 import com.autocar.app.ui.screens.DashboardScreen
@@ -87,6 +90,7 @@ import com.autocar.app.viewmodel.PathsViewModel
 import com.autocar.app.viewmodel.SensorsViewModel
 import com.autocar.app.viewmodel.SettingsViewModel
 import com.autocar.app.viewmodel.ColorViewModel
+import com.autocar.app.viewmodel.TerminalViewModel
 import com.autocar.app.viewmodel.TrackViewModel
 
 enum class NavTab(val label: String, val icon: ImageVector) {
@@ -94,7 +98,7 @@ enum class NavTab(val label: String, val icon: ImageVector) {
     Face("Face", Icons.Default.Face),
     Track("Track", Icons.Default.CenterFocusStrong),
     Color("Color", Icons.Default.Palette),
-    Dashboard("Dashboard", Icons.Default.Dashboard),
+    Config("Config", Icons.Default.Settings),
     Drive("Drive", Icons.Default.Gamepad),
     Paths("Paths", Icons.Default.Route),
 }
@@ -105,10 +109,11 @@ private enum class Viewport(val label: String, val icon: ImageVector) {
     Face("Face", Icons.Default.Face),
     Track("Track", Icons.Default.CenterFocusStrong),
     Color("Color", Icons.Default.Palette),
+    Config("Config", Icons.Default.Settings),
 }
 
 /** Tabs shown in the right rail (tablet landscape) — side-panel content. */
-private val railTabs = listOf(NavTab.Dashboard, NavTab.Drive, NavTab.Paths)
+private val railTabs = listOf(NavTab.Drive, NavTab.Paths)
 
 @Composable
 fun AppNavGraph(
@@ -161,6 +166,7 @@ fun AppNavGraph(
     val colorVm: ColorViewModel = viewModel()
     val driveVm: DriveViewModel = viewModel()
     val pathsVm: PathsViewModel = viewModel()
+    val terminalVm: TerminalViewModel = viewModel()
 
     val gamepadState by gamepadManager.state.collectAsState()
     val gamepadConnected = gamepadState.connected
@@ -199,7 +205,7 @@ fun AppNavGraph(
         } else null,
         onSensorsPanelCycle = if (useRail) { delta ->
             if (layoutMode == "grid") {
-                val count = 3 // Dashboard, Drive, Paths
+                val count = 2 // Drive, Paths
                 gridPanelTab = (gridPanelTab + delta + count) % count
             } else {
                 val idx = railTabs.indexOf(classicActiveTab ?: railTabs[0])
@@ -235,6 +241,7 @@ fun AppNavGraph(
                         colorVm = colorVm,
                         driveVm = driveVm,
                         pathsVm = pathsVm,
+                        terminalVm = terminalVm,
                         faceBackend = faceBackend,
                         onFaceBackendChange = { faceBackend = it },
                         faceMode = faceMode,
@@ -262,6 +269,7 @@ fun AppNavGraph(
                         colorVm = colorVm,
                         driveVm = driveVm,
                         pathsVm = pathsVm,
+                        terminalVm = terminalVm,
                         faceBackend = faceBackend,
                         onFaceBackendChange = { faceBackend = it },
                         faceMode = faceMode,
@@ -289,6 +297,7 @@ fun AppNavGraph(
                     colorVm = colorVm,
                     driveVm = driveVm,
                     pathsVm = pathsVm,
+                    terminalVm = terminalVm,
                     faceBackend = faceBackend,
                     onFaceBackendChange = { faceBackend = it },
                     faceMode = faceMode,
@@ -377,6 +386,7 @@ private fun ColumnScope.TabletLandscapeLayout(
     colorVm: ColorViewModel,
     driveVm: DriveViewModel,
     pathsVm: PathsViewModel,
+    terminalVm: TerminalViewModel,
     faceBackend: String,
     onFaceBackendChange: (String) -> Unit,
     faceMode: String,
@@ -394,6 +404,7 @@ private fun ColumnScope.TabletLandscapeLayout(
     onActiveTabChange: (NavTab?) -> Unit,
 ) {
     var viewport by remember { mutableStateOf(Viewport.Sensors) }
+    var configTab by remember { mutableIntStateOf(0) }
 
     // Sync gamepad tab selection to tablet viewport/panel
     LaunchedEffect(selectedTab) {
@@ -402,7 +413,7 @@ private fun ColumnScope.TabletLandscapeLayout(
             NavTab.Face -> { viewport = Viewport.Face; onActiveTabChange(null) }
             NavTab.Track -> { viewport = Viewport.Track; onActiveTabChange(null) }
             NavTab.Color -> { viewport = Viewport.Color; onActiveTabChange(null) }
-            NavTab.Dashboard -> onActiveTabChange(NavTab.Dashboard)
+            NavTab.Config -> { viewport = Viewport.Config; onActiveTabChange(null) }
             NavTab.Drive -> onActiveTabChange(NavTab.Drive)
             NavTab.Paths -> onActiveTabChange(NavTab.Paths)
         }
@@ -411,13 +422,13 @@ private fun ColumnScope.TabletLandscapeLayout(
     val scale = LocalUiScale.current
 
     Row(modifier = Modifier.weight(1f)) {
-        // Left rail — viewport selector
+        // Left rail — viewport selector with Config anchored at bottom
         AnimatedVisibility(visible = showChrome, enter = fadeIn(), exit = fadeOut()) {
             NavigationRail(
                 modifier = Modifier.width((80 * scale).dp),
                 containerColor = MaterialTheme.colorScheme.surface,
             ) {
-                Viewport.entries.forEach { vp ->
+                Viewport.entries.filter { it != Viewport.Config }.forEach { vp ->
                     NavigationRailItem(
                         icon = { Icon(vp.icon, contentDescription = vp.label, modifier = Modifier.size((24 * scale).dp)) },
                         label = { Text(vp.label) },
@@ -432,6 +443,20 @@ private fun ColumnScope.TabletLandscapeLayout(
                         ),
                     )
                 }
+                Spacer(Modifier.weight(1f))
+                NavigationRailItem(
+                    icon = { Icon(Viewport.Config.icon, contentDescription = Viewport.Config.label, modifier = Modifier.size((24 * scale).dp)) },
+                    label = { Text(Viewport.Config.label) },
+                    selected = viewport == Viewport.Config,
+                    onClick = { viewport = Viewport.Config },
+                    colors = NavigationRailItemDefaults.colors(
+                        selectedIconColor = Gold,
+                        selectedTextColor = Gold,
+                        indicatorColor = GoldDark.copy(alpha = 0.25f),
+                        unselectedIconColor = MaterialTheme.colorScheme.onSurfaceVariant,
+                        unselectedTextColor = MaterialTheme.colorScheme.onSurfaceVariant,
+                    ),
+                )
             }
         }
 
@@ -458,6 +483,11 @@ private fun ColumnScope.TabletLandscapeLayout(
                     selectedMode = colorMode,
                     onModeChange = onColorModeChange,
                 )
+                Viewport.Config -> ConfigViewport(
+                    terminalVm = terminalVm,
+                    selectedTab = configTab,
+                    onTabChange = { configTab = it },
+                )
             }
         }
 
@@ -468,7 +498,6 @@ private fun ColumnScope.TabletLandscapeLayout(
             onClose = { onActiveTabChange(null) },
         ) {
             when (activeTab) {
-                NavTab.Dashboard -> DashboardScreen()
                 NavTab.Drive -> DriveScreen(gamepadManager = gamepadManager, driveVm = driveVm)
                 NavTab.Paths -> PathsScreen(
                     pathsVm = pathsVm,
@@ -521,6 +550,7 @@ private fun ColumnScope.GridLayout(
     colorVm: ColorViewModel,
     driveVm: DriveViewModel,
     pathsVm: PathsViewModel,
+    terminalVm: TerminalViewModel,
     faceBackend: String,
     onFaceBackendChange: (String) -> Unit,
     faceMode: String,
@@ -547,7 +577,8 @@ private fun ColumnScope.GridLayout(
     LaunchedEffect(Unit) { sensorsVm.connect() }
 
     var viewport by remember { mutableStateOf(Viewport.Sensors) }
-    val panelTabs = listOf("Dashboard", "Drive", "Paths")
+    var configTab by remember { mutableIntStateOf(0) }
+    val panelTabs = listOf("Drive", "Paths")
 
     // Sync gamepad tab selection to grid viewport/panel
     LaunchedEffect(selectedTab) {
@@ -556,22 +587,22 @@ private fun ColumnScope.GridLayout(
             NavTab.Face -> { viewport = Viewport.Face; onExpandedCellChange(null) }
             NavTab.Track -> { viewport = Viewport.Track; onExpandedCellChange(null) }
             NavTab.Color -> { viewport = Viewport.Color; onExpandedCellChange(null) }
-            NavTab.Dashboard -> { onExpandedCellChange(GridCell.Panel); onPanelTabChange(0) }
-            NavTab.Drive -> { onExpandedCellChange(GridCell.Panel); onPanelTabChange(1) }
-            NavTab.Paths -> { onExpandedCellChange(GridCell.Panel); onPanelTabChange(2) }
+            NavTab.Config -> { viewport = Viewport.Config; onExpandedCellChange(null) }
+            NavTab.Drive -> { onExpandedCellChange(GridCell.Panel); onPanelTabChange(0) }
+            NavTab.Paths -> { onExpandedCellChange(GridCell.Panel); onPanelTabChange(1) }
         }
     }
 
     val scale = LocalUiScale.current
 
     Row(modifier = Modifier.weight(1f)) {
-        // Left rail — viewport selector (same as classic)
+        // Left rail — viewport selector with Config anchored at bottom
         AnimatedVisibility(visible = showChrome, enter = fadeIn(), exit = fadeOut()) {
             NavigationRail(
                 modifier = Modifier.width((80 * scale).dp),
                 containerColor = MaterialTheme.colorScheme.surface,
             ) {
-                Viewport.entries.forEach { vp ->
+                Viewport.entries.filter { it != Viewport.Config }.forEach { vp ->
                     NavigationRailItem(
                         icon = { Icon(vp.icon, contentDescription = vp.label, modifier = Modifier.size((24 * scale).dp)) },
                         label = { Text(vp.label) },
@@ -589,6 +620,23 @@ private fun ColumnScope.GridLayout(
                         ),
                     )
                 }
+                Spacer(Modifier.weight(1f))
+                NavigationRailItem(
+                    icon = { Icon(Viewport.Config.icon, contentDescription = Viewport.Config.label, modifier = Modifier.size((24 * scale).dp)) },
+                    label = { Text(Viewport.Config.label) },
+                    selected = viewport == Viewport.Config && expandedCell == null,
+                    onClick = {
+                        viewport = Viewport.Config
+                        onExpandedCellChange(null)
+                    },
+                    colors = NavigationRailItemDefaults.colors(
+                        selectedIconColor = Gold,
+                        selectedTextColor = Gold,
+                        indicatorColor = GoldDark.copy(alpha = 0.25f),
+                        unselectedIconColor = MaterialTheme.colorScheme.onSurfaceVariant,
+                        unselectedTextColor = MaterialTheme.colorScheme.onSurfaceVariant,
+                    ),
+                )
             }
         }
 
@@ -626,9 +674,8 @@ private fun ColumnScope.GridLayout(
                         }
                         Box(Modifier.weight(1f)) {
                             when (panelTab) {
-                                0 -> DashboardScreen()
-                                1 -> DriveScreen(gamepadManager = gamepadManager, driveVm = driveVm)
-                                2 -> PathsScreen(
+                                0 -> DriveScreen(gamepadManager = gamepadManager, driveVm = driveVm)
+                                1 -> PathsScreen(
                                     pathsVm = pathsVm,
                                     selectedIndex = pathsSelectedIndex,
                                     gamepadConnected = gamepadConnected,
@@ -680,7 +727,13 @@ private fun ColumnScope.GridLayout(
                     onModeChange = onColorModeChange,
                 )
             }
-
+            Viewport.Config -> Box(modifier = Modifier.weight(1f)) {
+                ConfigViewport(
+                    terminalVm = terminalVm,
+                    selectedTab = configTab,
+                    onTabChange = { configTab = it },
+                )
+            }
             // Sensors — 2x2 grid with hold-to-enlarge
             Viewport.Sensors -> {
             // Two-column layout: cameras left, lidar + panel right
@@ -773,9 +826,8 @@ private fun ColumnScope.GridLayout(
                             }
                             Box(Modifier.weight(1f)) {
                                 when (panelTab) {
-                                    0 -> DashboardScreen()
-                                    1 -> DriveScreen(gamepadManager = gamepadManager, driveVm = driveVm)
-                                    2 -> PathsScreen(
+                                    0 -> DriveScreen(gamepadManager = gamepadManager, driveVm = driveVm)
+                                    1 -> PathsScreen(
                                         pathsVm = pathsVm,
                                         selectedIndex = pathsSelectedIndex,
                                         gamepadConnected = gamepadConnected,
@@ -803,6 +855,7 @@ private fun ColumnScope.PhoneLayout(
     colorVm: ColorViewModel,
     driveVm: DriveViewModel,
     pathsVm: PathsViewModel,
+    terminalVm: TerminalViewModel,
     faceBackend: String,
     onFaceBackendChange: (String) -> Unit,
     faceMode: String,
@@ -839,7 +892,7 @@ private fun ColumnScope.PhoneLayout(
                 selectedMode = colorMode,
                 onModeChange = onColorModeChange,
             )
-            NavTab.Dashboard -> DashboardScreen()
+            NavTab.Config -> ConfigViewport(terminalVm = terminalVm)
             NavTab.Drive -> DriveScreen(gamepadManager = gamepadManager, driveVm = driveVm)
             NavTab.Paths -> PathsScreen(
                 pathsVm = pathsVm,

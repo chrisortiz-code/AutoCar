@@ -1,5 +1,5 @@
 """
-Universal UDP receiver -> CAN motor control (runs on Jetson).
+Universal UDP receiver -> USB ODrive motor control (runs on Jetson).
 Listens for drive packets from PS4, camera tracking, GUI, or any sender using
 the shared D/S/E/Q packet format.
 
@@ -14,7 +14,7 @@ import struct
 import threading
 import time
 
-from can_bus import MecanumCAN, MOTORS
+from usb_odrive import MecanumUSB, ROLE_DIR, ALL_ROLES
 
 LISTEN_PORT = 5555
 RELAY_PORT = 5556
@@ -28,15 +28,15 @@ _start_time = time.time()
 
 
 def check_current_spike(mc):
-    """Return (node_id, current) of a stalled motor, or None."""
-    currents = {nid: abs(mc.currents.get(nid, 0.0)) for nid in mc.connected}
+    """Return (role, current) of a stalled motor, or None."""
+    currents = {r: abs(mc.currents.get(r, 0.0)) for r in mc.connected}
     if len(currents) < 2:
         return None
-    for nid, amps in currents.items():
-        others = [v for k, v in currents.items() if k != nid]
+    for role, amps in currents.items():
+        others = [v for k, v in currents.items() if k != role]
         avg_others = sum(others) / len(others)
         if amps > avg_others + CURRENT_SPIKE_THRESHOLD and amps > 5.0:
-            return nid, amps
+            return role, amps
     return None
 
 
@@ -59,10 +59,10 @@ def _status_responder(mc, driving_ref):
             status = {
                 "connected": sorted(mc.connected),
                 "armed": sorted(mc.armed),
-                "errors": {str(n): mc.errors.get(n, 0) for n in range(4)},
-                "axis_states": {str(n): mc.axis_states.get(n, 0) for n in range(4)},
-                "positions": {str(n): mc.positions.get(n, 0.0) for n in range(4)},
-                "currents": {str(n): mc.currents.get(n, 0.0) for n in range(4)},
+                "errors": {r: mc.errors.get(r, 0) for r in ALL_ROLES},
+                "axis_states": {r: mc.axis_states.get(r, 0) for r in ALL_ROLES},
+                "positions": {r: mc.positions.get(r, 0.0) for r in ALL_ROLES},
+                "currents": {r: mc.currents.get(r, 0.0) for r in ALL_ROLES},
                 "driving": driving_ref(),
                 "uptime": round(time.time() - _start_time, 1),
             }
@@ -83,17 +83,15 @@ def main():
     if args.diff_drive:
         print("=== DIFFERENTIAL DRIVE MODE (BL + BR only) ===\n")
 
-    mc = MecanumCAN(current_limit=30.0, diff_drive=args.diff_drive)
+    mc = MecanumUSB(current_limit=30.0, diff_drive=args.diff_drive)
 
     recovery_lock = threading.Lock()
 
-    def handle_fault(node_id, error_code):
+    def handle_fault(role, error_code):
         if recovery_lock.locked():
             return
         with recovery_lock:
-            from can_bus import MOTORS
-            role = MOTORS[node_id]["role"] if node_id in MOTORS else str(node_id)
-            print(f"\n!! FAULT on motor {role} (node {node_id}), error=0x{error_code:08X}")
+            print(f"\n!! FAULT on motor {role}, error=0x{error_code:08X}")
             print("   Auto-recovering: stop -> clear errors -> re-arm ...")
             mc.estop_and_recover()
             print("   Recovery complete.\n")
@@ -149,13 +147,10 @@ def main():
 
                 now = time.time()
                 if now - last_log >= LOG_INTERVAL:
-                    mc.request_all_iq()
                     time.sleep(CURRENT_CHECK_INTERVAL)
                     spike = check_current_spike(mc)
                     if spike:
-                        nid, amps = spike
-                        from can_bus import MOTORS
-                        role = MOTORS[nid]["role"]
+                        role, amps = spike
                         print(f"\n!! CURRENT SPIKE on {role} ({amps:.1f}A) - auto estop+recover")
                         mc.estop_and_recover()
                         driving = False
@@ -166,7 +161,6 @@ def main():
             elif cmd == "S":
                 if driving:
                     mc.zero_vel()
-                    mc.request_all_iq()
                     print(f"\nStopped. {mc.status_line()}")
                     driving = False
 
@@ -179,24 +173,21 @@ def main():
                 print("Re-armed.\n")
 
             elif cmd == "W":
-                # Per-wheel velocity: 4 floats in node-ID order (0,1,2,3)
+                # Per-wheel velocity: 4 floats in role order (BL,FL,BR,FR)
                 vels = struct.unpack("<ffff", data[1:17])
-                for nid, vel in enumerate(vels):
-                    if nid in mc.active_ids:
-                        mc.set_vel(nid, vel)
+                for role, vel in zip(ALL_ROLES, vels):
+                    if role in mc.active_roles:
+                        mc.set_vel(role, vel)
                 if not driving:
                     print(f"Driving per-wheel (from {addr[0]})")
                 driving = True
 
                 now = time.time()
                 if now - last_log >= LOG_INTERVAL:
-                    mc.request_all_iq()
                     time.sleep(CURRENT_CHECK_INTERVAL)
                     spike = check_current_spike(mc)
                     if spike:
-                        nid, amps = spike
-                        from can_bus import MOTORS
-                        role = MOTORS[nid]["role"]
+                        role, amps = spike
                         print(f"\n!! CURRENT SPIKE on {role} ({amps:.1f}A) - auto estop+recover")
                         mc.estop_and_recover()
                         driving = False

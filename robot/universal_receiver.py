@@ -14,13 +14,14 @@ import struct
 import threading
 import time
 
-from usb_odrive import MecanumUSB, ROLE_DIR, ALL_ROLES
+from motor_control import MecanumUSB, ROLE_DIR, ALL_ROLES
 
 LISTEN_PORT = 5555
 RELAY_PORT = 5556
 TIMEOUT = 0.5      # no packet for this long -> safety stop
+IDLE_DISARM = 10.0 # seconds idle before disarming motors (stops hum)
 LOG_INTERVAL = 0.2 # seconds between amperage/status prints
-CURRENT_SPIKE_THRESHOLD = 8.0  # amps above the average of other motors = stall
+CURRENT_SPIKE_THRESHOLD = 20.0  # amps above the average of other motors = stall
 CURRENT_CHECK_INTERVAL = 0.15
 
 _shutdown_event = threading.Event()
@@ -98,7 +99,6 @@ def main():
 
     mc.on_fault(handle_fault)
     mc.connect()
-    mc.arm_all()
 
     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     sock.bind(("0.0.0.0", LISTEN_PORT))
@@ -124,9 +124,15 @@ def main():
     print("Waiting for controller packets from PS4/camera/GUI...\n")
 
     last_log = 0.0
+    last_drive_time = 0.0
 
     try:
         while not _shutdown_event.is_set():
+            # Disarm after idle to stop motor hum
+            if not driving and mc.armed and (time.time() - last_drive_time > IDLE_DISARM):
+                print("Idle timeout — disarming motors.")
+                mc.stop_all()
+
             try:
                 data, addr = sock.recvfrom(64)
             except socket.timeout:
@@ -134,12 +140,15 @@ def main():
                     print("Timeout - no packets. Stopping.")
                     mc.zero_vel()
                     driving = False
+                    last_drive_time = time.time()
                 continue
 
             cmd = chr(data[0])
 
             if cmd == "D":
                 vx, vy, trans_speed, rot_speed = struct.unpack("<ffff", data[1:17])
+                if not mc.armed:
+                    mc.arm_all()
                 mc.drive(vx, vy, trans_speed, -rot_speed)
                 if not driving:
                     print(f"Driving (from {addr[0]})")
@@ -163,6 +172,7 @@ def main():
                     mc.zero_vel()
                     print(f"\nStopped. {mc.status_line()}")
                     driving = False
+                    last_drive_time = time.time()
 
             elif cmd == "E":
                 print("\nE-STOP received!")
@@ -175,6 +185,8 @@ def main():
             elif cmd == "W":
                 # Per-wheel velocity: 4 floats in role order (BL,FL,BR,FR)
                 vels = struct.unpack("<ffff", data[1:17])
+                if not mc.armed:
+                    mc.arm_all()
                 for role, vel in zip(ALL_ROLES, vels):
                     if role in mc.active_roles:
                         mc.set_vel(role, vel)

@@ -17,6 +17,7 @@ import sys
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
 
 # ── App ───────────────────────────────────────────────────────────────
 
@@ -63,6 +64,11 @@ app.include_router(obstacles_stream_router)
 app.include_router(rl_router)
 app.include_router(rl_stream_router)
 app.include_router(viewers_router)
+
+
+_static_dir = os.path.join(os.path.dirname(__file__), "static")
+if os.path.isdir(_static_dir):
+    app.mount("/static", StaticFiles(directory=_static_dir, html=True), name="static")
 
 
 @app.get("/")

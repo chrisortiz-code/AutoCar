@@ -1,0 +1,424 @@
+<title>Drive Control</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;700&family=Inter:wght@400;600;700&display=swap">
+<style>
+  /* Layout: centered control panel with key grid and status */
+  :root {
+    --bg: #0f1114;
+    --surface: #1a1d23;
+    --border: #2a2d35;
+    --fg: #e0e2e8;
+    --fg-dim: #6b7080;
+    --accent: #4a9eff;
+    --accent-glow: rgba(74, 158, 255, 0.15);
+    --danger: #ff4a5e;
+    --success: #3dd68c;
+    --key-bg: #22262e;
+    --key-active: #4a9eff;
+    color-scheme: dark;
+  }
+  @media (prefers-color-scheme: light) {
+    :root:not([data-theme="dark"]) {
+      --bg: #f5f6f8;
+      --surface: #ffffff;
+      --border: #d8dbe2;
+      --fg: #1a1d23;
+      --fg-dim: #7a7f8e;
+      --accent: #2b7de9;
+      --accent-glow: rgba(43, 125, 233, 0.1);
+      --danger: #dc3545;
+      --success: #28a745;
+      --key-bg: #e8eaef;
+      --key-active: #2b7de9;
+      color-scheme: light;
+    }
+  }
+  :root[data-theme="light"] {
+    --bg: #f5f6f8;
+    --surface: #ffffff;
+    --border: #d8dbe2;
+    --fg: #1a1d23;
+    --fg-dim: #7a7f8e;
+    --accent: #2b7de9;
+    --accent-glow: rgba(43, 125, 233, 0.1);
+    --danger: #dc3545;
+    --success: #28a745;
+    --key-bg: #e8eaef;
+    --key-active: #2b7de9;
+    color-scheme: light;
+  }
+
+  body {
+    background: var(--bg);
+    color: var(--fg);
+    font-family: 'Inter', system-ui, sans-serif;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    min-height: 100vh;
+    padding-left: max(16px, env(safe-area-inset-left, 0px));
+    padding-right: max(16px, env(safe-area-inset-right, 0px));
+    padding-block: 24px;
+    gap: 24px;
+    user-select: none;
+  }
+
+  h1 {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 1.1rem;
+    font-weight: 700;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--accent);
+    margin: 0;
+  }
+
+  .connection {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    font-size: 0.85rem;
+  }
+  .connection input {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 0.85rem;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    color: var(--fg);
+    padding: 6px 10px;
+    border-radius: 6px;
+    width: 220px;
+  }
+  .dot {
+    width: 8px; height: 8px;
+    border-radius: 50%;
+    background: var(--danger);
+    transition: background 0.3s;
+  }
+  .dot.ok { background: var(--success); }
+
+  .panel {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 28px 32px;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 20px;
+  }
+
+  .keys {
+    display: grid;
+    grid-template-columns: repeat(3, 72px);
+    grid-template-rows: repeat(2, 72px);
+    gap: 8px;
+  }
+
+  .key {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    background: var(--key-bg);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    font-family: 'JetBrains Mono', monospace;
+    font-weight: 700;
+    font-size: 1.3rem;
+    cursor: pointer;
+    transition: all 0.1s;
+    gap: 2px;
+  }
+  .key .label {
+    font-size: 0.55rem;
+    font-weight: 400;
+    color: var(--fg-dim);
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+  }
+  .key.active {
+    background: var(--key-active);
+    color: #fff;
+    border-color: var(--key-active);
+    box-shadow: 0 0 20px var(--accent-glow);
+    transform: scale(0.95);
+  }
+  .key.active .label { color: rgba(255,255,255,0.7); }
+
+  .row2 {
+    display: grid;
+    grid-template-columns: repeat(3, 72px);
+    gap: 8px;
+  }
+
+  .stop-btn {
+    grid-column: 1 / -1;
+    background: var(--danger);
+    color: #fff;
+    border: none;
+    border-radius: 10px;
+    font-family: 'JetBrains Mono', monospace;
+    font-weight: 700;
+    font-size: 0.9rem;
+    letter-spacing: 0.08em;
+    padding: 14px;
+    cursor: pointer;
+    text-transform: uppercase;
+    transition: opacity 0.15s;
+  }
+  .stop-btn:hover { opacity: 0.85; }
+
+  .speed-ctrl {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    font-size: 0.85rem;
+    color: var(--fg-dim);
+    width: 100%;
+  }
+  .speed-ctrl label {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 0.75rem;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    min-width: 50px;
+  }
+  .speed-ctrl input[type=range] {
+    flex: 1;
+    accent-color: var(--accent);
+  }
+  .speed-ctrl .val {
+    font-family: 'JetBrains Mono', monospace;
+    font-weight: 700;
+    color: var(--fg);
+    min-width: 32px;
+    text-align: right;
+  }
+
+  .status {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 0.75rem;
+    color: var(--fg-dim);
+    text-align: center;
+  }
+
+  .hint {
+    font-size: 0.75rem;
+    color: var(--fg-dim);
+    text-align: center;
+    max-width: 340px;
+    line-height: 1.5;
+  }
+
+  @media (max-width: 480px) {
+    .keys { grid-template-columns: repeat(3, 60px); grid-template-rows: repeat(2, 60px); }
+    .row2 { grid-template-columns: repeat(3, 60px); }
+    .key { font-size: 1.1rem; }
+    .panel { padding: 20px; }
+  }
+</style>
+
+<h1>AutoCar Drive</h1>
+
+<div class="connection">
+  <div class="dot" id="dot"></div>
+  <span>API:</span>
+  <input id="host" value="http://127.0.0.1:8080" spellcheck="false">
+</div>
+
+<div class="panel">
+  <div class="keys">
+    <div class="key" data-key="q" id="k-q">Q<span class="label">Rot L</span></div>
+    <div class="key" data-key="w" id="k-w">W<span class="label">Fwd</span></div>
+    <div class="key" data-key="e" id="k-e">E<span class="label">Rot R</span></div>
+    <div class="key" data-key="a" id="k-a">A<span class="label">Left</span></div>
+    <div class="key" data-key="s" id="k-s">S<span class="label">Back</span></div>
+    <div class="key" data-key="d" id="k-d">D<span class="label">Right</span></div>
+  </div>
+
+  <div class="speed-ctrl">
+    <label>Speed</label>
+    <input type="range" id="speed" min="0.5" max="10" step="0.5" value="3">
+    <span class="val" id="speed-val">3.0</span>
+  </div>
+
+  <div class="speed-ctrl">
+    <label>Rot</label>
+    <input type="range" id="rot-speed" min="0.5" max="8" step="0.5" value="2">
+    <span class="val" id="rot-val">2.0</span>
+  </div>
+
+  <button class="stop-btn" id="estop">Space &mdash; E-Stop</button>
+</div>
+
+<div class="status" id="status">Press a key to drive</div>
+<div class="hint">WASD to move, Q/E to rotate, Space for emergency stop. Hold keys for continuous drive.</div>
+
+<script>
+(function() {
+  const pressed = new Set();
+  const els = {};
+  'qweasd'.split('').forEach(k => els[k] = document.getElementById('k-' + k));
+
+  const hostInput = document.getElementById('host');
+  const dot = document.getElementById('dot');
+  const statusEl = document.getElementById('status');
+  const speedSlider = document.getElementById('speed');
+  const speedVal = document.getElementById('speed-val');
+  const rotSlider = document.getElementById('rot-speed');
+  const rotVal = document.getElementById('rot-val');
+  const estopBtn = document.getElementById('estop');
+
+  speedSlider.addEventListener('input', () => speedVal.textContent = parseFloat(speedSlider.value).toFixed(1));
+  rotSlider.addEventListener('input', () => rotVal.textContent = parseFloat(rotSlider.value).toFixed(1));
+
+  function api() { return hostInput.value.replace(/\/+$/, ''); }
+
+  async function post(path, body) {
+    try {
+      const r = await fetch(api() + path, {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: body ? JSON.stringify(body) : undefined,
+      });
+      if (r.ok) {
+        dot.classList.add('ok');
+        return await r.json();
+      }
+      dot.classList.remove('ok');
+    } catch(e) {
+      dot.classList.remove('ok');
+    }
+  }
+
+  function computeCommand() {
+    let vx = 0, vy = 0, rot = 0;
+    if (pressed.has('w')) vx += 1;
+    if (pressed.has('s')) vx -= 1;
+    if (pressed.has('a')) vy += 1;
+    if (pressed.has('d')) vy -= 1;
+    if (pressed.has('q')) rot -= 1;
+    if (pressed.has('e')) rot += 1;
+    return { vx, vy, rot };
+  }
+
+  let sendInterval = null;
+
+  function startSending() {
+    if (sendInterval) return;
+    sendInterval = setInterval(sendCommand, 100);
+    sendCommand();
+  }
+
+  function stopSending() {
+    if (sendInterval) {
+      clearInterval(sendInterval);
+      sendInterval = null;
+    }
+    post('/api/drive/stop');
+    statusEl.textContent = 'Stopped';
+  }
+
+  function sendCommand() {
+    const cmd = computeCommand();
+    if (cmd.vx === 0 && cmd.vy === 0 && cmd.rot === 0) {
+      stopSending();
+      return;
+    }
+    const speed = parseFloat(speedSlider.value);
+    const rotSpeed = parseFloat(rotSlider.value);
+
+    const dirs = [];
+    if (cmd.vx > 0) dirs.push('Fwd');
+    if (cmd.vx < 0) dirs.push('Back');
+    if (cmd.vy > 0) dirs.push('Left');
+    if (cmd.vy < 0) dirs.push('Right');
+    if (cmd.rot < 0) dirs.push('Rot L');
+    if (cmd.rot > 0) dirs.push('Rot R');
+    statusEl.textContent = 'Driving: ' + dirs.join(' + ');
+
+    post('/api/drive/velocity', {
+      vx: cmd.vx,
+      vy: cmd.vy,
+      speed: speed,
+      rotation: cmd.rot * rotSpeed,
+    });
+  }
+
+  function updateKeys() {
+    'qweasd'.split('').forEach(k => {
+      els[k].classList.toggle('active', pressed.has(k));
+    });
+  }
+
+  document.addEventListener('keydown', (e) => {
+    const k = e.key.toLowerCase();
+    if (k === ' ') {
+      e.preventDefault();
+      pressed.clear();
+      updateKeys();
+      if (sendInterval) { clearInterval(sendInterval); sendInterval = null; }
+      post('/api/drive/estop');
+      statusEl.textContent = 'E-STOP';
+      return;
+    }
+    if ('qweasd'.includes(k) && !pressed.has(k)) {
+      pressed.add(k);
+      updateKeys();
+      startSending();
+    }
+  });
+
+  document.addEventListener('keyup', (e) => {
+    const k = e.key.toLowerCase();
+    if ('qweasd'.includes(k)) {
+      pressed.delete(k);
+      updateKeys();
+      if (pressed.size === 0) stopSending();
+      else sendCommand();
+    }
+  });
+
+  // Touch/click support for mobile
+  document.querySelectorAll('.key').forEach(el => {
+    const k = el.dataset.key;
+    el.addEventListener('pointerdown', (e) => {
+      e.preventDefault();
+      pressed.add(k);
+      updateKeys();
+      startSending();
+    });
+    el.addEventListener('pointerup', () => {
+      pressed.delete(k);
+      updateKeys();
+      if (pressed.size === 0) stopSending();
+      else sendCommand();
+    });
+    el.addEventListener('pointerleave', () => {
+      pressed.delete(k);
+      updateKeys();
+      if (pressed.size === 0) stopSending();
+      else sendCommand();
+    });
+  });
+
+  estopBtn.addEventListener('click', () => {
+    pressed.clear();
+    updateKeys();
+    if (sendInterval) { clearInterval(sendInterval); sendInterval = null; }
+    post('/api/drive/estop');
+    statusEl.textContent = 'E-STOP';
+  });
+
+  // Fail-safe: stop on blur
+  window.addEventListener('blur', () => {
+    if (pressed.size > 0) {
+      pressed.clear();
+      updateKeys();
+      stopSending();
+    }
+  });
+})();
+</script>

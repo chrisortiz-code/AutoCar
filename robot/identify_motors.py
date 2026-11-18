@@ -7,16 +7,16 @@ Usage:  python robot/identify_motors.py
 """
 
 import time
-from usb_odrive import MecanumUSB, ALL_ROLES, save_config
+from motor_control import MecanumUSB, ALL_ROLES, save_config
 from odrive.enums import (
     AXIS_STATE_IDLE,
     AXIS_STATE_CLOSED_LOOP_CONTROL,
     CONTROL_MODE_VELOCITY_CONTROL,
-    INPUT_MODE_PASSTHROUGH,
+    INPUT_MODE_VEL_RAMP,
 )
 
 SPIN_VEL = 2.0    # turns/s — slow enough to be safe
-SPIN_TIME = 2.0   # seconds per motor
+SPIN_TIME = 5.0   # seconds per motor
 
 
 def main():
@@ -32,7 +32,9 @@ def main():
         print(f"  [{i}] serial={sn}")
 
     print(f"\n--- Spinning each ODrive for {SPIN_TIME}s at {SPIN_VEL} turns/s ---")
-    print("Watch which wheel spins!\n")
+    print("Watch which wheel spins!")
+    input("\nPress Enter when ready to start identification...")
+    print()
 
     mapping = {}
     try:
@@ -40,7 +42,7 @@ def main():
             ax = odrv.axis0
             print(f">>> ODrive [{i}] serial={sn} — spinning now...")
             ax.controller.config.control_mode = CONTROL_MODE_VELOCITY_CONTROL
-            ax.controller.config.input_mode = INPUT_MODE_PASSTHROUGH
+            ax.controller.config.input_mode = INPUT_MODE_VEL_RAMP
             ax.requested_state = AXIS_STATE_CLOSED_LOOP_CONTROL
             time.sleep(0.2)
             ax.controller.input_vel = SPIN_VEL

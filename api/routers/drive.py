@@ -141,6 +141,19 @@ def move_wheels(body: WheelVelocities):
     return {"ok": True}
 
 
+class VelocityCmd(BaseModel):
+    vx: float = Field(0, description="Forward/back (-1 to 1)")
+    vy: float = Field(0, description="Left/right strafe (-1 to 1)")
+    speed: float = Field(3.0, description="Translation speed (turns/s)")
+    rotation: float = Field(0, description="Rotation speed (turns/s)")
+
+
+@router.post("/velocity")
+def drive_velocity(body: VelocityCmd):
+    send_drive(body.vx, body.vy, body.speed, body.rotation)
+    return {"ok": True}
+
+
 @router.post("/stop")
 def stop():
     global _moving

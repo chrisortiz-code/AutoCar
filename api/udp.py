@@ -106,6 +106,21 @@ def send_estop():
     _udp_sock.sendto(b"E", _udp_dest)
 
 
+def send_safety_toggle(enabled):
+    """Send a 'T' safety toggle packet."""
+    print(f"[motor] T  safety={'on' if enabled else 'off'}")
+    _udp_sock.sendto(b"T" + struct.pack("<B", int(enabled)), _udp_dest)
+
+
+def send_safety_config(min_dist_mm, slow_dist_mm, fov_half_deg):
+    """Send a 'C' safety config packet."""
+    print(f"[motor] C  min={min_dist_mm} slow={slow_dist_mm} fov={fov_half_deg}")
+    _udp_sock.sendto(
+        b"C" + struct.pack("<iif", min_dist_mm, slow_dist_mm, fov_half_deg),
+        _udp_dest
+    )
+
+
 # ── Mecanum math ─────────────────────────────────────────────────────
 
 def mecanum_speeds(vx, vy, omega):

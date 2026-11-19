@@ -47,6 +47,7 @@ from api.routers.object_track import router as track_router, stream_router as tr
 from api.routers.color_track import router as color_router, stream_router as color_stream_router
 from api.routers.obstacles import router as obstacles_router, stream_router as obstacles_stream_router
 from api.routers.rl_track import router as rl_router, stream_router as rl_stream_router
+from api.routers.safety import router as safety_router
 from api.routers.viewers import router as viewers_router
 
 app.include_router(drive_router)
@@ -63,6 +64,7 @@ app.include_router(obstacles_router)
 app.include_router(obstacles_stream_router)
 app.include_router(rl_router)
 app.include_router(rl_stream_router)
+app.include_router(safety_router)
 app.include_router(viewers_router)
 
 
@@ -85,6 +87,7 @@ def root():
             "track": "/api/track",
             "color": "/api/color",
             "rl": "/api/rl",
+            "safety": "/api/safety",
             "obstacles": "/api/obstacles",
             "websocket": "/api/ws/sensors",
             "dashboard": "/viewer/dashboard",

@@ -3,7 +3,7 @@ Universal UDP receiver -> USB ODrive motor control (runs on Jetson).
 Listens for drive packets from PS4, camera tracking, GUI, or any sender using
 the shared D/S/E/Q packet format.
 
-Usage:  python universal_receiver.py [--diff-drive]
+Usage:  python universal_receiver.py [--diff-drive] [--no-safety]
 """
 
 import argparse
@@ -15,6 +15,7 @@ import threading
 import time
 
 from motor_control import MecanumUSB, ROLE_DIR, ALL_ROLES
+from safety_filter import SafetyFilter
 
 LISTEN_PORT = 5555
 RELAY_PORT = 5556
@@ -41,7 +42,7 @@ def check_current_spike(mc):
     return None
 
 
-def _status_responder(mc, driving_ref):
+def _status_responder(mc, driving_ref, safety_ref=None):
     """Thread: listen on RELAY_PORT, reply to b'?' with JSON motor state."""
     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     sock.bind(("0.0.0.0", RELAY_PORT))
@@ -67,6 +68,14 @@ def _status_responder(mc, driving_ref):
                 "driving": driving_ref(),
                 "uptime": round(time.time() - _start_time, 1),
             }
+            if safety_ref:
+                s = safety_ref
+                status["safety"] = {
+                    "enabled": s.enabled,
+                    "lidar_connected": s.lidar_connected,
+                    "last_action": s.last_action,
+                    "nearest_mm": s.nearest_obstacle_mm,
+                }
             try:
                 sock.sendto(json.dumps(status).encode(), addr)
             except OSError:
@@ -79,6 +88,12 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--diff-drive", action="store_true",
                         help="Differential drive mode: back two motors only (BL, BR)")
+    parser.add_argument("--no-safety", action="store_true",
+                        help="Disable lidar safety filter on startup")
+    parser.add_argument("--safety-min-dist", type=int, default=250,
+                        help="Safety filter min distance in mm (default 250)")
+    parser.add_argument("--safety-slow-dist", type=int, default=800,
+                        help="Safety filter slow distance in mm (default 800)")
     args = parser.parse_args()
 
     if args.diff_drive:
@@ -100,6 +115,13 @@ def main():
     mc.on_fault(handle_fault)
     mc.connect()
 
+    safety = SafetyFilter(
+        enabled=not args.no_safety,
+        min_dist_mm=args.safety_min_dist,
+        slow_dist_mm=args.safety_slow_dist,
+    )
+    safety.start()
+
     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     sock.bind(("0.0.0.0", LISTEN_PORT))
     sock.settimeout(TIMEOUT)
@@ -117,7 +139,7 @@ def main():
         return driving
 
     threading.Thread(
-        target=_status_responder, args=(mc, _driving_ref), daemon=True,
+        target=_status_responder, args=(mc, _driving_ref, safety), daemon=True,
     ).start()
 
     print(f"\nListening on UDP :{LISTEN_PORT}")
@@ -147,6 +169,8 @@ def main():
 
             if cmd == "D":
                 vx, vy, trans_speed, rot_speed = struct.unpack("<ffff", data[1:17])
+                vx, vy, trans_speed, rot_speed, action = safety.filter_drive(
+                    vx, vy, trans_speed, rot_speed)
                 if not mc.armed:
                     mc.arm_all()
                 mc.drive(vx, vy, trans_speed, -rot_speed)
@@ -184,7 +208,19 @@ def main():
 
             elif cmd == "W":
                 # Per-wheel velocity: 4 floats in role order (BL,FL,BR,FR)
-                vels = struct.unpack("<ffff", data[1:17])
+                vels = list(struct.unpack("<ffff", data[1:17]))
+                # Approximate net direction from wheel vels for safety check
+                net_speed = sum(abs(v) for v in vels) / max(len(vels), 1)
+                if net_speed > 0.01:
+                    net_vx = (vels[1] + vels[3]) / 2  # FL + FR -> forward
+                    net_vy = (vels[0] + vels[1]) / 2 - (vels[2] + vels[3]) / 2
+                    _, _, _, _, action = safety.filter_drive(
+                        net_vx, net_vy, net_speed, 0.0)
+                    if action == "block":
+                        vels = [0.0, 0.0, 0.0, 0.0]
+                    elif action.startswith("deflect:"):
+                        scale = float(action.split(":")[1])
+                        vels = [v * scale for v in vels]
                 if not mc.armed:
                     mc.arm_all()
                 for role, vel in zip(ALL_ROLES, vels):
@@ -207,6 +243,17 @@ def main():
                     print(f"  {mc.status_line()}", end="\r")
                     last_log = now
 
+            elif cmd == "T":
+                safety.enabled = bool(data[1])
+                print(f"Safety {'enabled' if safety.enabled else 'disabled'}")
+
+            elif cmd == "C":
+                min_d, slow_d, fov = struct.unpack("<iif", data[1:13])
+                safety.min_dist_mm = min_d
+                safety.slow_dist_mm = slow_d
+                safety.fov_half_deg = fov
+                print(f"Safety config: min={min_d}mm slow={slow_d}mm fov={fov:.0f}deg")
+
             elif cmd == "Q":
                 print("Quit received.")
                 break
@@ -214,6 +261,7 @@ def main():
     except KeyboardInterrupt:
         print("\nInterrupted.")
     finally:
+        safety.stop()
         mc.shutdown()
         sock.close()
 

@@ -212,6 +212,63 @@
     line-height: 1.5;
   }
 
+  .safety-panel {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 20px 28px;
+    display: flex;
+    flex-direction: column;
+    gap: 14px;
+    width: 100%;
+    max-width: 320px;
+  }
+  .safety-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+  }
+  .safety-title {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 0.8rem;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+  }
+  .safety-badge {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 0.65rem;
+    font-weight: 700;
+    padding: 3px 8px;
+    border-radius: 6px;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+  }
+  .safety-badge.on { background: var(--success); color: #000; }
+  .safety-badge.off { background: var(--danger); color: #fff; }
+  .safety-badge.no-scan { background: var(--fg-dim); color: var(--bg); }
+  .toggle-btn {
+    background: var(--key-bg);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    color: var(--fg);
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 0.75rem;
+    padding: 8px 14px;
+    cursor: pointer;
+    transition: all 0.15s;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+  }
+  .toggle-btn:hover { border-color: var(--accent); }
+  .safety-info {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 0.7rem;
+    color: var(--fg-dim);
+    display: flex;
+    justify-content: space-between;
+  }
+
   @media (max-width: 480px) {
     .keys { grid-template-columns: repeat(3, 60px); grid-template-rows: repeat(2, 60px); }
     .row2 { grid-template-columns: repeat(3, 60px); }
@@ -254,6 +311,34 @@
 </div>
 
 <div class="status" id="status">Press a key to drive</div>
+
+<div class="safety-panel" id="safety-panel">
+  <div class="safety-header">
+    <span class="safety-title">Safety Filter</span>
+    <span class="safety-badge no-scan" id="safety-badge">offline</span>
+  </div>
+  <button class="toggle-btn" id="safety-toggle">Disable</button>
+  <div class="safety-info">
+    <span>Nearest: <span id="nearest-mm">—</span></span>
+    <span>Action: <span id="last-action">—</span></span>
+  </div>
+  <div class="speed-ctrl">
+    <label>Min</label>
+    <input type="range" id="sf-min" min="100" max="600" step="25" value="250">
+    <span class="val" id="sf-min-val">250</span>
+  </div>
+  <div class="speed-ctrl">
+    <label>Slow</label>
+    <input type="range" id="sf-slow" min="400" max="2000" step="50" value="800">
+    <span class="val" id="sf-slow-val">800</span>
+  </div>
+  <div class="speed-ctrl">
+    <label>FOV</label>
+    <input type="range" id="sf-fov" min="20" max="120" step="5" value="60">
+    <span class="val" id="sf-fov-val">60°</span>
+  </div>
+</div>
+
 <div class="hint">WASD to move, Q/E to rotate, Space for emergency stop. Hold keys for continuous drive.</div>
 
 <script>
@@ -420,5 +505,76 @@
       stopSending();
     }
   });
+
+  // ── Safety filter controls ──────────────────────────────────────
+  const safetyBadge = document.getElementById('safety-badge');
+  const safetyToggle = document.getElementById('safety-toggle');
+  const nearestEl = document.getElementById('nearest-mm');
+  const lastActionEl = document.getElementById('last-action');
+  const sfMin = document.getElementById('sf-min');
+  const sfMinVal = document.getElementById('sf-min-val');
+  const sfSlow = document.getElementById('sf-slow');
+  const sfSlowVal = document.getElementById('sf-slow-val');
+  const sfFov = document.getElementById('sf-fov');
+  const sfFovVal = document.getElementById('sf-fov-val');
+
+  let safetyEnabled = true;
+
+  sfMin.addEventListener('input', () => sfMinVal.textContent = sfMin.value);
+  sfSlow.addEventListener('input', () => sfSlowVal.textContent = sfSlow.value);
+  sfFov.addEventListener('input', () => sfFovVal.textContent = sfFov.value + '°');
+
+  let configTimer = null;
+  function scheduleConfigPush() {
+    clearTimeout(configTimer);
+    configTimer = setTimeout(() => {
+      post('/api/safety/config', {
+        min_dist_mm: parseInt(sfMin.value),
+        slow_dist_mm: parseInt(sfSlow.value),
+        fov_half_deg: parseFloat(sfFov.value),
+      });
+    }, 300);
+  }
+  sfMin.addEventListener('change', scheduleConfigPush);
+  sfSlow.addEventListener('change', scheduleConfigPush);
+  sfFov.addEventListener('change', scheduleConfigPush);
+
+  safetyToggle.addEventListener('click', async () => {
+    const path = safetyEnabled ? '/api/safety/disable' : '/api/safety/enable';
+    await post(path);
+  });
+
+  async function pollSafetyStatus() {
+    try {
+      const r = await fetch(api() + '/api/safety/status');
+      if (!r.ok) return;
+      const s = await r.json();
+      safetyEnabled = s.enabled;
+
+      if (!s.receiver_online) {
+        safetyBadge.className = 'safety-badge no-scan';
+        safetyBadge.textContent = 'offline';
+        safetyToggle.textContent = 'Offline';
+      } else if (!s.lidar_connected) {
+        safetyBadge.className = 'safety-badge no-scan';
+        safetyBadge.textContent = 'no lidar';
+        safetyToggle.textContent = s.enabled ? 'Disable' : 'Enable';
+      } else if (s.enabled) {
+        safetyBadge.className = 'safety-badge on';
+        safetyBadge.textContent = 'active';
+        safetyToggle.textContent = 'Disable';
+      } else {
+        safetyBadge.className = 'safety-badge off';
+        safetyBadge.textContent = 'off';
+        safetyToggle.textContent = 'Enable';
+      }
+
+      nearestEl.textContent = s.nearest_mm > 0 ? s.nearest_mm + 'mm' : '—';
+      lastActionEl.textContent = s.last_action || '—';
+    } catch(e) {}
+  }
+
+  setInterval(pollSafetyStatus, 1000);
+  pollSafetyStatus();
 })();
 </script>

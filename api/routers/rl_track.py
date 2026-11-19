@@ -1,0 +1,487 @@
+"""
+RL policy tracking endpoints.
+
+Uses CSRT for target detection, paints the bounding box green, and feeds the
+modified frame to a trained recurrent RL policy (CNN+LSTM) that outputs motor
+commands. The policy was trained in IsaacLab simulation to follow green targets.
+
+Pipeline:
+    CSRT (every frame) → green overlay → RL policy (4 Hz) → UDP motor commands
+"""
+
+import math
+import os
+import socket
+import struct
+import threading
+import time
+
+import cv2
+import numpy as np
+from fastapi import APIRouter, Depends
+from fastapi.responses import StreamingResponse
+from pydantic import BaseModel, Field
+
+from api.auth import require_auth
+from api.udp import UDP_HOST, UDP_PORT
+
+router = APIRouter(prefix="/api/rl", tags=["rl"], dependencies=[Depends(require_auth)])
+stream_router = APIRouter(prefix="/api/rl", tags=["rl"])
+
+# ── State ─────────────────────────────────────────────────────────────
+_lock = threading.Lock()
+_state = {
+    "status": "idle",       # idle | loading | streaming | tracking | lost
+    "status_msg": "",
+    "confidence": 0.0,
+    "actions": [0.0, 0.0, 0.0],
+    "lstm_step": 0,
+    "fps": 0.0,
+    "desired_dist": 1.0,
+    "target_depth": 0,      # mm
+    "cur_depth": 0,          # mm
+}
+_tracker_thread = None
+_stop_event = threading.Event()
+_bbox_queue = []
+_reset_flag = False
+_latest_jpeg = None
+_camera_reader = None
+_lidar_reader = None
+
+
+def set_camera_reader(camera):
+    """Inject the shared CameraReader."""
+    global _camera_reader
+    _camera_reader = camera
+
+
+def set_lidar_reader(lidar):
+    """Inject the shared LidarProxy/LidarReader."""
+    global _lidar_reader
+    _lidar_reader = lidar
+
+
+# ── Configuration ─────────────────────────────────────────────────────
+
+# Policy runs at 4 Hz (matching sim decimation: dt=0.01667 × 15 steps)
+POLICY_HZ = 4
+
+# Action scaling — conservative defaults, tune on real robot
+FORWARD_SCALE = 0.4
+STRAFE_SCALE = 0.4
+YAW_SCALE = 0.5
+
+# Motor limits (matching object_track.py)
+MAX_ROT_SPEED = 3.0
+MAX_RANGE_SPEED = 5.0
+
+# Target loss timeouts
+COAST_TIMEOUT = 0.5     # seconds: coast on last command
+STOP_TIMEOUT = 2.0      # seconds: stop and reset LSTM
+
+# Default model checkpoint path
+DEFAULT_CHECKPOINT = os.path.join(
+    os.path.dirname(__file__), "..", "..", "rl_policy", "checkpoints", "model_best.pt"
+)
+
+
+def _clamp(value, low, high):
+    return max(low, min(high, value))
+
+
+def _draw_text(img, text, pos, color):
+    cv2.putText(img, text, pos, cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 0), 2, cv2.LINE_AA)
+    cv2.putText(img, text, pos, cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 1, cv2.LINE_AA)
+
+
+def _scale_actions(raw_actions):
+    """Convert policy outputs to UDP D-packet values.
+
+    The policy outputs body-frame [forward, strafe, yaw], each roughly [-1, 1].
+    The D-packet expects (vx, vy, trans_speed, rot_speed) where vx/vy is a
+    direction unit vector and trans_speed is the magnitude.
+
+    This is equivalent to converting (fwd, strafe) → (theta, speed):
+        theta = atan2(strafe, fwd)   → encoded as unit vector (vx=cos, vy=sin)
+        speed = norm(fwd, strafe)    → scaled to motor turns/s
+
+    Args:
+        raw_actions: [forward, strafe, yaw] roughly [-1, 1].
+
+    Returns:
+        (vx, vy, trans_speed, rot_speed) for the D packet.
+    """
+    fwd = raw_actions[0] * FORWARD_SCALE
+    strafe = raw_actions[1] * STRAFE_SCALE
+    yaw = raw_actions[2] * YAW_SCALE
+
+    # (fwd, strafe) → direction + magnitude, matching drive(vx, vy, speed, rot)
+    magnitude = math.sqrt(fwd ** 2 + strafe ** 2)
+    if magnitude > 0.01:
+        # Unit vector = direction theta as (cos, sin)
+        vx = fwd / magnitude
+        vy = strafe / magnitude
+        trans_speed = min(magnitude, 1.0) * MAX_RANGE_SPEED
+    else:
+        vx = 0.0
+        vy = 0.0
+        trans_speed = 0.0
+
+    rot_speed = _clamp(yaw * MAX_ROT_SPEED, -MAX_ROT_SPEED, MAX_ROT_SPEED)
+    return vx, vy, trans_speed, rot_speed
+
+
+# ── Tracker thread ────────────────────────────────────────────────────
+
+def _rl_tracker_loop(desired_dist_m, checkpoint_path):
+    global _latest_jpeg, _reset_flag
+
+    with _lock:
+        _state["status"] = "loading"
+        _state["status_msg"] = "Loading RL policy..."
+
+    import sys
+    sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", ".."))
+
+    from rl_policy.inference import PolicyRunner
+    from object_tracking.csrt_backend import CSRTMatcher
+
+    # Determine device
+    try:
+        import torch
+        device = "cuda" if torch.cuda.is_available() else "cpu"
+    except Exception:
+        device = "cpu"
+
+    runner = PolicyRunner(checkpoint_path, device=device)
+    csrt = CSRTMatcher()
+
+    with _lock:
+        _state["status_msg"] = "Connecting camera..."
+
+    use_realsense = _camera_reader is not None and _camera_reader.connected
+    cap = None
+    if not use_realsense:
+        import platform
+        if platform.system() == "Linux":
+            cap = cv2.VideoCapture(0, cv2.CAP_V4L2)
+        else:
+            cap = cv2.VideoCapture(0)
+        if not cap.isOpened():
+            with _lock:
+                _state["status"] = "idle"
+                _state["status_msg"] = "Camera failed to open"
+            return
+
+    udp_sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    udp_dest = (UDP_HOST, UDP_PORT)
+    policy_interval = 1.0 / POLICY_HZ
+    last_policy_tick = 0.0
+    last_seen = 0.0
+    driving = False
+    has_reference = False
+    frozen_until = 0.0
+    frozen_jpeg = None
+
+    fps_count = 0
+    fps_t0 = time.perf_counter()
+
+    with _lock:
+        _state.update(status="streaming", status_msg="", desired_dist=desired_dist_m)
+
+    try:
+        while not _stop_event.is_set():
+            # ── Get camera frame ──
+            depth_frame = None
+            if use_realsense:
+                frames = _camera_reader.get_frames()
+                frame = frames.get("rgb")
+                depth_frame = frames.get("depth")
+                if frame is None:
+                    time.sleep(0.03)
+                    continue
+            else:
+                ok, frame = cap.read()
+                if not ok:
+                    break
+
+            now = time.time()
+            fh, fw = frame.shape[:2]
+
+            # ── Handle commands ──
+            with _lock:
+                bboxes = list(_bbox_queue)
+                _bbox_queue.clear()
+                reset = _reset_flag
+                _reset_flag = False
+
+            if reset:
+                has_reference = False
+                frozen_jpeg = None
+                frozen_until = 0.0
+                runner.reset()
+                if driving:
+                    udp_sock.sendto(b"S", udp_dest)
+                    driving = False
+                with _lock:
+                    _state.update(status="streaming", confidence=0.0,
+                                  actions=[0.0, 0.0, 0.0], lstm_step=0,
+                                  target_depth=0, cur_depth=0)
+
+            # ── Process new bounding box ──
+            if bboxes:
+                x1, y1, x2, y2 = bboxes[-1]
+                px1 = int(_clamp(x1, 0, 1) * fw)
+                py1 = int(_clamp(y1, 0, 1) * fh)
+                px2 = int(_clamp(x2, 0, 1) * fw)
+                py2 = int(_clamp(y2, 0, 1) * fh)
+                px1, px2 = min(px1, px2), max(px1, px2)
+                py1, py2 = min(py1, py2), max(py1, py2)
+
+                if (px2 - px1) > 10 and (py2 - py1) > 10:
+                    csrt.set_reference_roi(frame, px1, py1, px2, py2)
+                    runner.reset()
+                    has_reference = True
+                    # Freeze stream briefly
+                    snap = frame.copy()
+                    cv2.rectangle(snap, (px1, py1), (px2, py2), (0, 255, 255), 2)
+                    _draw_text(snap, "RL target set", (px1, max(py1 - 8, 14)), (0, 255, 255))
+                    _, fbuf = cv2.imencode(".jpg", snap, [cv2.IMWRITE_JPEG_QUALITY, 70])
+                    frozen_jpeg = fbuf.tobytes()
+                    frozen_until = time.time() + 1.0
+                    with _lock:
+                        _state["status"] = "tracking"
+                        _latest_jpeg = frozen_jpeg
+
+            # While frozen, keep outputting the frozen frame
+            if frozen_jpeg and time.time() < frozen_until:
+                with _lock:
+                    _latest_jpeg = frozen_jpeg
+                time.sleep(0.03)
+                continue
+            frozen_jpeg = None
+
+            # ── Run CSRT on every frame ──
+            display = frame.copy()
+            bbox = None
+
+            if has_reference:
+                bbox = csrt.find(frame)
+                if bbox is not None:
+                    last_seen = now
+
+                # ── Run policy at POLICY_HZ ──
+                if now - last_policy_tick >= policy_interval:
+                    if bbox is not None:
+                        confidence = bbox.confidence
+
+                        # Get lidar scan
+                        scan_points = []
+                        if _lidar_reader is not None:
+                            scan_data = _lidar_reader.get_scan()
+                            scan_points = scan_data.get("points", [])
+
+                        # Provide depth (zeros if no RealSense)
+                        if depth_frame is None:
+                            depth_frame = np.zeros((fh, fw), dtype=np.uint16)
+
+                        # Run policy
+                        raw_actions = runner.step(
+                            frame, depth_frame, bbox, scan_points, desired_dist_m,
+                        )
+
+                        # Scale actions to motor commands
+                        vx, vy, trans_speed, rot_speed = _scale_actions(raw_actions)
+
+                        if abs(trans_speed) < 0.01 and abs(rot_speed) < 0.01:
+                            if driving:
+                                udp_sock.sendto(b"S", udp_dest)
+                                driving = False
+                        else:
+                            pkt = b"D" + struct.pack("<ffff", vx, vy, trans_speed, rot_speed)
+                            udp_sock.sendto(pkt, udp_dest)
+                            driving = True
+
+                        # Sample current depth at target
+                        cur_depth = 0
+                        if depth_frame is not None:
+                            cpx = int(bbox.cx * fw)
+                            cpy = int(bbox.cy * fh)
+                            r = max(1, int(min(bbox.w, bbox.h) * min(fw, fh) * 0.1))
+                            roi = depth_frame[
+                                max(0, cpy - r):min(fh, cpy + r),
+                                max(0, cpx - r):min(fw, cpx + r),
+                            ]
+                            valid = roi[roi > 0]
+                            cur_depth = int(np.median(valid)) if len(valid) > 0 else 0
+
+                        with _lock:
+                            _state.update(
+                                status="tracking",
+                                confidence=confidence,
+                                actions=raw_actions,
+                                lstm_step=runner.step_count,
+                                cur_depth=cur_depth,
+                            )
+                    else:
+                        # Target lost — graduated fallback
+                        time_lost = now - last_seen
+                        if time_lost >= COAST_TIMEOUT:
+                            if driving:
+                                udp_sock.sendto(b"S", udp_dest)
+                                driving = False
+                        if time_lost >= STOP_TIMEOUT:
+                            runner.reset()
+
+                        status = "lost" if (now - last_seen) >= COAST_TIMEOUT else "tracking"
+                        with _lock:
+                            _state.update(
+                                status=status,
+                                confidence=0.0,
+                                actions=[0.0, 0.0, 0.0],
+                                lstm_step=runner.step_count,
+                            )
+
+                    last_policy_tick = now
+
+            # ── Build display frame ──
+            if bbox is not None:
+                # Paint green overlay on display for debug
+                bx1 = max(0, int((bbox.cx - bbox.w / 2) * fw))
+                by1 = max(0, int((bbox.cy - bbox.h / 2) * fh))
+                bx2 = min(fw, int((bbox.cx + bbox.w / 2) * fw))
+                by2 = min(fh, int((bbox.cy + bbox.h / 2) * fh))
+
+                # Semi-transparent green overlay (so user can still see what's underneath)
+                overlay = display.copy()
+                overlay[by1:by2, bx1:bx2] = (0, 255, 0)
+                cv2.addWeighted(overlay, 0.4, display, 0.6, 0, display)
+
+                # Bbox outline
+                cv2.rectangle(display, (bx1, by1), (bx2, by2), (255, 255, 0), 2)
+
+                # Labels
+                with _lock:
+                    acts = _state["actions"]
+                    step = _state["lstm_step"]
+                    cdepth = _state["cur_depth"]
+                _draw_text(display, f"RL step {step}", (8, 20), (0, 255, 255))
+                _draw_text(display, f"fwd={acts[0]:+.2f} str={acts[1]:+.2f} yaw={acts[2]:+.2f}",
+                           (8, 40), (0, 255, 255))
+                _draw_text(display, f"conf={bbox.confidence:.0%}", (bx1, max(by1 - 8, 14)), (0, 255, 0))
+                if cdepth > 0:
+                    _draw_text(display, f"{cdepth / 1000:.2f}m", (bx1, by2 + 16), (0, 255, 0))
+            elif has_reference:
+                _draw_text(display, "TARGET LOST", (8, 20), (0, 0, 255))
+
+            # Encode JPEG for stream
+            _, buf = cv2.imencode(".jpg", display, [cv2.IMWRITE_JPEG_QUALITY, 70])
+            with _lock:
+                _latest_jpeg = buf.tobytes()
+
+            # FPS counter
+            fps_count += 1
+            elapsed = time.perf_counter() - fps_t0
+            if elapsed >= 1.0:
+                with _lock:
+                    _state["fps"] = round(fps_count / elapsed, 1)
+                fps_count = 0
+                fps_t0 = time.perf_counter()
+
+            time.sleep(0.001)
+
+    finally:
+        if driving:
+            udp_sock.sendto(b"S", udp_dest)
+        udp_sock.close()
+        csrt.close()
+        if cap and not use_realsense:
+            cap.release()
+        with _lock:
+            _state.update(status="idle", confidence=0.0, actions=[0.0, 0.0, 0.0],
+                          lstm_step=0, fps=0.0)
+
+
+# ── Request models ────────────────────────────────────────────────────
+
+class SetRefBody(BaseModel):
+    x1: float = Field(..., description="Normalized left x (0-1)")
+    y1: float = Field(..., description="Normalized top y (0-1)")
+    x2: float = Field(..., description="Normalized right x (0-1)")
+    y2: float = Field(..., description="Normalized bottom y (0-1)")
+
+
+class RLStartBody(BaseModel):
+    desired_dist: float = Field(1.0, description="Target follow distance in meters")
+    checkpoint: str = Field("", description="Model checkpoint path (empty = default)")
+
+
+# ── Endpoints ─────────────────────────────────────────────────────────
+
+@router.post("/start")
+def start_rl(body: RLStartBody = RLStartBody()):
+    global _tracker_thread
+    if _tracker_thread and _tracker_thread.is_alive():
+        return {"ok": False, "error": "already running"}
+
+    checkpoint = body.checkpoint if body.checkpoint else DEFAULT_CHECKPOINT
+    if not os.path.exists(checkpoint):
+        return {"ok": False, "error": f"checkpoint not found: {checkpoint}"}
+
+    _stop_event.clear()
+    _tracker_thread = threading.Thread(
+        target=_rl_tracker_loop,
+        args=(body.desired_dist, checkpoint),
+        daemon=True,
+    )
+    _tracker_thread.start()
+    return {"ok": True, "desired_dist": body.desired_dist, "checkpoint": checkpoint}
+
+
+@router.post("/set_ref")
+def set_reference(body: SetRefBody):
+    with _lock:
+        _bbox_queue.append((body.x1, body.y1, body.x2, body.y2))
+    return {"ok": True}
+
+
+@router.post("/reset")
+def reset_rl():
+    global _reset_flag
+    with _lock:
+        _reset_flag = True
+    return {"ok": True}
+
+
+@router.post("/stop")
+def stop_rl():
+    _stop_event.set()
+    if _tracker_thread:
+        _tracker_thread.join(timeout=5)
+    return {"ok": True}
+
+
+@router.get("/status")
+def rl_status():
+    with _lock:
+        return dict(_state)
+
+
+@stream_router.get("/stream")
+def rl_stream():
+    def _generate():
+        while True:
+            with _lock:
+                jpeg = _latest_jpeg
+            if jpeg:
+                yield (
+                    b"--frame\r\n"
+                    b"Content-Type: image/jpeg\r\n\r\n" + jpeg + b"\r\n"
+                )
+            time.sleep(1.0 / 15)
+
+    return StreamingResponse(
+        _generate(),
+        media_type="multipart/x-mixed-replace; boundary=frame",
+    )

@@ -53,3 +53,19 @@ def config(body: SafetyConfig):
     fov = body.fov_half_deg if body.fov_half_deg is not None else 60.0
     send_safety_config(min_d, slow_d, fov)
     return {"ok": True, "min_dist_mm": min_d, "slow_dist_mm": slow_d, "fov_half_deg": fov}
+
+
+@router.get("/health")
+def health():
+    raw = query_motor_status()
+    h = raw.get("health", {})
+    return {
+        "max_temp_c": h.get("max_temp_c", 0),
+        "thermal_state": h.get("thermal_state", "unknown"),
+        "jetson_temps": h.get("jetson_temps", {}),
+        "vbus_min_v": h.get("vbus_min_v", 0),
+        "vbus_voltages": h.get("vbus_voltages", {}),
+        "battery_state": h.get("battery_state", "unknown"),
+        "speed_scale": h.get("speed_scale", 1.0),
+        "receiver_online": "error" not in raw,
+    }

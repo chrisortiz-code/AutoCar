@@ -268,6 +268,17 @@
     display: flex;
     justify-content: space-between;
   }
+  .health-bar {
+    display: flex;
+    gap: 16px;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 0.7rem;
+    color: var(--fg-dim);
+    flex-wrap: wrap;
+    justify-content: center;
+  }
+  .health-bar .warn { color: #f0a030; }
+  .health-bar .crit { color: var(--danger); }
 
   @media (max-width: 480px) {
     .keys { grid-template-columns: repeat(3, 60px); grid-template-rows: repeat(2, 60px); }
@@ -337,6 +348,12 @@
     <input type="range" id="sf-fov" min="20" max="120" step="5" value="60">
     <span class="val" id="sf-fov-val">60°</span>
   </div>
+</div>
+
+<div class="health-bar" id="health-bar">
+  <span>Temp: <span id="h-temp">—</span></span>
+  <span>Battery: <span id="h-vbus">—</span></span>
+  <span>Throttle: <span id="h-scale">100%</span></span>
 </div>
 
 <div class="hint">WASD to move, Q/E to rotate, Space for emergency stop. Hold keys for continuous drive.</div>
@@ -576,5 +593,41 @@
 
   setInterval(pollSafetyStatus, 1000);
   pollSafetyStatus();
+
+  // ── Health monitor ────────────────────────────────────────────
+  const hTemp = document.getElementById('h-temp');
+  const hVbus = document.getElementById('h-vbus');
+  const hScale = document.getElementById('h-scale');
+
+  function cls(el, state) {
+    el.className = '';
+    if (state === 'warn' || state === 'low') el.className = 'warn';
+    else if (state === 'critical') el.className = 'crit';
+  }
+
+  async function pollHealth() {
+    try {
+      const r = await fetch(api() + '/api/safety/health');
+      if (!r.ok) return;
+      const h = await r.json();
+      if (!h.receiver_online) {
+        hTemp.textContent = '—';
+        hVbus.textContent = '—';
+        hScale.textContent = '—';
+        return;
+      }
+      hTemp.textContent = h.max_temp_c > 0 ? h.max_temp_c + '°C' : '—';
+      cls(hTemp, h.thermal_state);
+      hVbus.textContent = h.vbus_min_v > 0 ? h.vbus_min_v.toFixed(1) + 'V' : '—';
+      cls(hVbus, h.battery_state);
+      const pct = Math.round(h.speed_scale * 100);
+      hScale.textContent = pct + '%';
+      if (pct < 100) hScale.className = pct === 0 ? 'crit' : 'warn';
+      else hScale.className = '';
+    } catch(e) {}
+  }
+
+  setInterval(pollHealth, 2000);
+  pollHealth();
 })();
 </script>

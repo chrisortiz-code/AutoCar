@@ -16,6 +16,7 @@ import time
 
 from motor_control import MecanumUSB, ROLE_DIR, ALL_ROLES
 from safety_filter import SafetyFilter
+from health_monitor import HealthMonitor, set_oom_priority
 
 LISTEN_PORT = 5555
 RELAY_PORT = 5556
@@ -42,7 +43,7 @@ def check_current_spike(mc):
     return None
 
 
-def _status_responder(mc, driving_ref, safety_ref=None):
+def _status_responder(mc, driving_ref, safety_ref=None, health_ref=None):
     """Thread: listen on RELAY_PORT, reply to b'?' with JSON motor state."""
     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     sock.bind(("0.0.0.0", RELAY_PORT))
@@ -65,6 +66,7 @@ def _status_responder(mc, driving_ref, safety_ref=None):
                 "axis_states": {r: mc.axis_states.get(r, 0) for r in ALL_ROLES},
                 "positions": {r: mc.positions.get(r, 0.0) for r in ALL_ROLES},
                 "currents": {r: mc.currents.get(r, 0.0) for r in ALL_ROLES},
+                "vbus": {r: mc.vbus_voltage.get(r, 0.0) for r in ALL_ROLES},
                 "driving": driving_ref(),
                 "uptime": round(time.time() - _start_time, 1),
             }
@@ -76,6 +78,8 @@ def _status_responder(mc, driving_ref, safety_ref=None):
                     "last_action": s.last_action,
                     "nearest_mm": s.nearest_obstacle_mm,
                 }
+            if health_ref:
+                status["health"] = health_ref.status_dict()
             try:
                 sock.sendto(json.dumps(status).encode(), addr)
             except OSError:
@@ -95,6 +99,8 @@ def main():
     parser.add_argument("--safety-slow-dist", type=int, default=800,
                         help="Safety filter slow distance in mm (default 800)")
     args = parser.parse_args()
+
+    set_oom_priority()
 
     if args.diff_drive:
         print("=== DIFFERENTIAL DRIVE MODE (BL + BR only) ===\n")
@@ -122,6 +128,10 @@ def main():
     )
     safety.start()
 
+    health = HealthMonitor(mc=mc)
+    health.on_critical(lambda: mc.stop_all())
+    health.start()
+
     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     sock.bind(("0.0.0.0", LISTEN_PORT))
     sock.settimeout(TIMEOUT)
@@ -139,7 +149,8 @@ def main():
         return driving
 
     threading.Thread(
-        target=_status_responder, args=(mc, _driving_ref, safety), daemon=True,
+        target=_status_responder, args=(mc, _driving_ref, safety, health),
+        daemon=True,
     ).start()
 
     print(f"\nListening on UDP :{LISTEN_PORT}")
@@ -171,6 +182,8 @@ def main():
                 vx, vy, trans_speed, rot_speed = struct.unpack("<ffff", data[1:17])
                 vx, vy, trans_speed, rot_speed, action = safety.filter_drive(
                     vx, vy, trans_speed, rot_speed)
+                trans_speed *= health.speed_scale
+                rot_speed *= health.speed_scale
                 if not mc.armed:
                     mc.arm_all()
                 mc.drive(vx, vy, trans_speed, -rot_speed)
@@ -221,6 +234,9 @@ def main():
                     elif action.startswith("deflect:"):
                         scale = float(action.split(":")[1])
                         vels = [v * scale for v in vels]
+                hs = health.speed_scale
+                if hs < 1.0:
+                    vels = [v * hs for v in vels]
                 if not mc.armed:
                     mc.arm_all()
                 for role, vel in zip(ALL_ROLES, vels):
@@ -261,6 +277,7 @@ def main():
     except KeyboardInterrupt:
         print("\nInterrupted.")
     finally:
+        health.stop()
         safety.stop()
         mc.shutdown()
         sock.close()

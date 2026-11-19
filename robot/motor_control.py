@@ -84,6 +84,7 @@ class MecanumUSB:
         self.currents = {r: 0.0 for r in ALL_ROLES}
         self.errors = {r: 0 for r in ALL_ROLES}
         self.axis_states = {r: 0 for r in ALL_ROLES}
+        self.vbus_voltage = {r: 0.0 for r in ALL_ROLES}
         self.max_vel = max_vel
         self.current_limit = current_limit
         self._closed = True
@@ -127,6 +128,7 @@ class MecanumUSB:
                     prev_error = self.errors.get(role, 0)
                     self.errors[role] = err
                     self.axis_states[role] = ax.current_state
+                    self.vbus_voltage[role] = round(odrv.vbus_voltage, 2)
 
                     if err != 0 and prev_error == 0 and self._fault_callback:
                         now = time.time()

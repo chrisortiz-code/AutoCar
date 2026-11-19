@@ -17,7 +17,7 @@ import time
 import urllib.request
 
 LIDAR_URL = "http://127.0.0.1:8092/scan"
-POLL_HZ = 20
+POLL_HZ = 10  # lidar scans at ~10 Hz, no point polling faster
 SCAN_TIMEOUT = 0.5  # seconds before scan is considered stale
 
 
@@ -106,6 +106,13 @@ class SafetyFilter:
             except Exception:
                 self._connected = False
             self._stop_event.wait(interval)
+
+    def set_scan(self, points):
+        """Push scan data directly, bypassing HTTP polling."""
+        with self._lock:
+            self._scan = points
+            self._scan_time = time.time()
+            self._connected = True
 
     # ── Core filter ──────────────────────────────────────────────────
 

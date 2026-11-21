@@ -499,6 +499,17 @@ def stop_rl():
     return {"ok": True}
 
 
+@router.get("/checkpoints")
+def list_checkpoints():
+    if not os.path.isdir(_CKPT_DIR):
+        return {"checkpoints": []}
+    files = sorted(
+        f for f in os.listdir(_CKPT_DIR)
+        if f.endswith(".pt") and "_traced" not in f
+    )
+    return {"checkpoints": files}
+
+
 @router.get("/status")
 def rl_status():
     with _lock:

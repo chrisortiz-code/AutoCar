@@ -30,7 +30,20 @@ class RlViewModel(app: Application) : AndroidViewModel(app) {
     private val _error = MutableStateFlow<String?>(null)
     val error: StateFlow<String?> = _error.asStateFlow()
 
+    private val _checkpoints = MutableStateFlow<List<String>>(emptyList())
+    val checkpoints: StateFlow<List<String>> = _checkpoints.asStateFlow()
+
     private var pollingJob: Job? = null
+
+    init {
+        fetchCheckpoints()
+    }
+
+    fun fetchCheckpoints() = viewModelScope.launch {
+        try {
+            _checkpoints.value = api().checkpoints().checkpoints
+        } catch (_: Exception) {}
+    }
 
     private suspend fun api(): RlApi {
         val baseUrl = store.baseUrl.first()
@@ -73,7 +86,9 @@ class RlViewModel(app: Application) : AndroidViewModel(app) {
         try {
             val baseUrl = store.baseUrl.first()
             _streamUrl.value = baseUrl.trimEnd('/') + "/api/rl/stream"
-            api().start(RlStartBody(desiredDist = desiredDist, checkpoint = checkpoint))
+            val ckptPath = if (checkpoint.isNotEmpty())
+                "rl_policy/checkpoints/$checkpoint" else ""
+            api().start(RlStartBody(desiredDist = desiredDist, checkpoint = ckptPath))
             _error.value = null
             startPolling()
         } catch (e: Exception) {

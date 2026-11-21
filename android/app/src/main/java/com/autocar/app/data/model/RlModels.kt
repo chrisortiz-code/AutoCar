@@ -26,6 +26,11 @@ data class RlState(
 )
 
 @Serializable
+data class RlCheckpointList(
+    val checkpoints: List<String> = emptyList(),
+)
+
+@Serializable
 data class RlStartBody(
     @SerialName("desired_dist") val desiredDist: Float = 1.0f,
     val checkpoint: String = "",

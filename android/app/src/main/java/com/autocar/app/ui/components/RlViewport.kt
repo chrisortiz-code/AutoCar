@@ -19,13 +19,22 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.ExposedDropdownMenuBox
+import androidx.compose.material3.ExposedDropdownMenuDefaults
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -50,6 +59,8 @@ fun RlViewport(
     val rlState by rlVm.rlState.collectAsState()
     val streamUrl by rlVm.streamUrl.collectAsState()
     val error by rlVm.error.collectAsState()
+    val checkpoints by rlVm.checkpoints.collectAsState()
+    var selectedCheckpoint by remember { mutableStateOf("") }
 
     DisposableEffect(Unit) {
         onDispose { rlVm.onTabHidden() }
@@ -222,8 +233,17 @@ fun RlViewport(
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
+
+                if (checkpoints.isNotEmpty()) {
+                    ModelSelector(
+                        checkpoints = checkpoints,
+                        selected = selectedCheckpoint,
+                        onSelect = { selectedCheckpoint = it },
+                    )
+                }
+
                 Button(
-                    onClick = { rlVm.start() },
+                    onClick = { rlVm.start(checkpoint = selectedCheckpoint) },
                     modifier = Modifier.fillMaxWidth(),
                     colors = ButtonDefaults.buttonColors(containerColor = Gold),
                 ) { Text("Start RL", fontWeight = FontWeight.Bold, color = Color.Black) }
@@ -410,5 +430,50 @@ private fun ActionBar(label: String, value: Float) {
             color = MaterialTheme.colorScheme.onSurface,
             textAlign = TextAlign.End,
         )
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun ModelSelector(
+    checkpoints: List<String>,
+    selected: String,
+    onSelect: (String) -> Unit,
+) {
+    var expanded by remember { mutableStateOf(false) }
+    val display = if (selected.isEmpty()) "Default (${checkpoints.firstOrNull() ?: "none"})"
+        else selected.removeSuffix(".pt")
+
+    ExposedDropdownMenuBox(
+        expanded = expanded,
+        onExpandedChange = { expanded = it },
+    ) {
+        OutlinedTextField(
+            value = display,
+            onValueChange = {},
+            readOnly = true,
+            label = { Text("Model") },
+            trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded) },
+            colors = OutlinedTextFieldDefaults.colors(
+                focusedBorderColor = Gold,
+                focusedLabelColor = Gold,
+            ),
+            modifier = Modifier.menuAnchor().fillMaxWidth(),
+        )
+        ExposedDropdownMenu(
+            expanded = expanded,
+            onDismissRequest = { expanded = false },
+        ) {
+            DropdownMenuItem(
+                text = { Text("Default") },
+                onClick = { onSelect(""); expanded = false },
+            )
+            checkpoints.forEach { ckpt ->
+                DropdownMenuItem(
+                    text = { Text(ckpt.removeSuffix(".pt")) },
+                    onClick = { onSelect(ckpt); expanded = false },
+                )
+            }
+        }
     }
 }

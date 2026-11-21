@@ -1,6 +1,7 @@
 package com.autocar.app.data.api
 
 import com.autocar.app.data.model.ApiResult
+import com.autocar.app.data.model.RlCheckpointList
 import com.autocar.app.data.model.RlSetRefBody
 import com.autocar.app.data.model.RlStartBody
 import com.autocar.app.data.model.RlState
@@ -9,6 +10,9 @@ import retrofit2.http.GET
 import retrofit2.http.POST
 
 interface RlApi {
+    @GET("api/rl/checkpoints")
+    suspend fun checkpoints(): RlCheckpointList
+
     @POST("api/rl/start")
     suspend fun start(@Body body: RlStartBody = RlStartBody()): ApiResult
 

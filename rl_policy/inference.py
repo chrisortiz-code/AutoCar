@@ -3,10 +3,14 @@
 Supports depth-only and RGBD model variants. Target identification is handled
 by CSRT tracking outside the policy, with tracker-derived signals passed
 through the state vector.
+
+Automatically uses TorchScript FP16 exports when available (run
+export_jetson.py to generate them). Falls back to raw checkpoints otherwise.
 """
 
 from __future__ import annotations
 
+import os
 import numpy as np
 import torch
 import cv2
@@ -16,6 +20,7 @@ from rl_policy.model import Actor, load_actor
 MAX_DEPTH_M = 30.0
 MAX_DEPTH_MM = MAX_DEPTH_M * 1000.0
 NUM_LIDAR_RAYS = 3000
+TRACED_LIDAR_RAYS = 360
 IMG_SIZE = 64
 
 GPU_MEMORY_FRACTION = 0.4
@@ -29,7 +34,19 @@ class PolicyRunner:
         if self.device.type == "cuda" and torch.cuda.is_available():
             torch.cuda.set_per_process_memory_fraction(GPU_MEMORY_FRACTION)
             print(f"GPU memory capped at {GPU_MEMORY_FRACTION:.0%} of available")
-        self.model = load_actor(checkpoint_path, device)
+
+        traced_path = checkpoint_path.replace(".pt", "_traced_fp16.pt")
+        if os.path.exists(traced_path):
+            print(f"Loading TorchScript FP16: {traced_path}")
+            self.traced = torch.jit.load(traced_path, map_location=self.device)
+            self.traced.eval()
+            self.model = load_actor(checkpoint_path, device)
+            self.fp16 = True
+        else:
+            self.traced = None
+            self.model = load_actor(checkpoint_path, device)
+            self.fp16 = False
+
         self.hidden: tuple[torch.Tensor, torch.Tensor] | None = None
         self.step_count = 0
         self.reset()
@@ -81,6 +98,18 @@ class PolicyRunner:
         ranges = np.full(NUM_LIDAR_RAYS, MAX_DEPTH_MM, dtype=np.float32)
         for pt in scan_points:
             slot = int(pt["angle"] * NUM_LIDAR_RAYS / 360.0) % NUM_LIDAR_RAYS
+            dist = float(pt["dist_mm"])
+            if 0 < dist < MAX_DEPTH_MM:
+                ranges[slot] = min(ranges[slot], dist)
+        ranges /= MAX_DEPTH_MM
+        return torch.from_numpy(ranges).unsqueeze(0).to(self.device)
+
+    def _preprocess_lidar_traced(self, scan_points: list[dict]) -> torch.Tensor:
+        """Bin scan points into 360 angular slots for traced models."""
+        n = TRACED_LIDAR_RAYS
+        ranges = np.full(n, MAX_DEPTH_MM, dtype=np.float32)
+        for pt in scan_points:
+            slot = int(pt["angle"] * n / 360.0) % n
             dist = float(pt["dist_mm"])
             if 0 < dist < MAX_DEPTH_MM:
                 ranges[slot] = min(ranges[slot], dist)
@@ -196,14 +225,35 @@ class PolicyRunner:
         else:
             image = self.preprocess_depth(depth_mm)
 
-        lidar = self.preprocess_lidar(scan_points) if self.has_lidar else None
         state = self.compute_state(cx, cy, w, h, depth_mm, desired_dist_m)
 
-        actions, self.hidden = self.model(image, state, self.hidden, lidar)
-        self.hidden = (self.hidden[0].detach(), self.hidden[1].detach())
+        if self.traced is not None:
+            lidar = self._preprocess_lidar_traced(scan_points)
+            if self.fp16:
+                image = image.half()
+                state = state.half()
+                lidar = lidar.half()
+
+            nl = self.model.lstm.num_layers
+            hd = self.model.lstm_hidden_dim
+            dtype = torch.float16 if self.fp16 else torch.float32
+            if self.hidden is None:
+                h0 = torch.zeros(nl, 1, hd, device=self.device, dtype=dtype)
+                c0 = torch.zeros(nl, 1, hd, device=self.device, dtype=dtype)
+            else:
+                h0, c0 = self.hidden
+                if self.fp16:
+                    h0, c0 = h0.half(), c0.half()
+
+            actions, h_new, c_new = self.traced(image, state, h0, c0, lidar)
+            self.hidden = (h_new.detach(), c_new.detach())
+        else:
+            lidar = self.preprocess_lidar(scan_points) if self.has_lidar else None
+            actions, self.hidden = self.model(image, state, self.hidden, lidar)
+            self.hidden = (self.hidden[0].detach(), self.hidden[1].detach())
 
         self.step_count += 1
-        return actions[0].cpu().tolist()
+        return actions[0].float().cpu().tolist()
 
     @property
     def last_painted_frame(self) -> np.ndarray | None:

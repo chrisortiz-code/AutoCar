@@ -4,6 +4,7 @@ __pycache__/
 .idea/
 paths.db
 *.pt
+!rl_policy/checkpoints/*.pt
 
 # Android
 android/.gradle/

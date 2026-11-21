@@ -5,6 +5,7 @@ import com.autocar.app.data.model.RlCheckpointList
 import com.autocar.app.data.model.RlSetRefBody
 import com.autocar.app.data.model.RlStartBody
 import com.autocar.app.data.model.RlState
+import com.autocar.app.data.model.SafetyStatus
 import retrofit2.http.Body
 import retrofit2.http.GET
 import retrofit2.http.POST
@@ -27,4 +28,13 @@ interface RlApi {
 
     @GET("api/rl/status")
     suspend fun status(): RlState
+
+    @POST("api/safety/enable")
+    suspend fun safetyEnable(): ApiResult
+
+    @POST("api/safety/disable")
+    suspend fun safetyDisable(): ApiResult
+
+    @GET("api/safety/status")
+    suspend fun safetyStatus(): SafetyStatus
 }

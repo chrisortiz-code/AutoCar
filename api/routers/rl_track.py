@@ -154,18 +154,18 @@ def _scale_actions(raw_actions):
 
 # ── Tracker thread ────────────────────────────────────────────────────
 
-def _rl_tracker_loop(desired_dist_m, checkpoint_path):
+def _rl_tracker_loop(desired_dist_m, checkpoint_path, backend="csrt"):
     global _latest_jpeg, _reset_flag
 
     with _lock:
         _state["status"] = "loading"
-        _state["status_msg"] = "Loading RL policy..."
+        _state["status_msg"] = f"Loading RL policy + {backend} tracker..."
 
     import sys
     sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", ".."))
 
     from rl_policy.inference import PolicyRunner
-    from object_tracking.csrt_backend import CSRTMatcher
+    from object_tracking.base import create_matcher
 
     # Determine device
     try:
@@ -175,7 +175,7 @@ def _rl_tracker_loop(desired_dist_m, checkpoint_path):
         device = "cpu"
 
     runner = PolicyRunner(checkpoint_path, device=device)
-    csrt = CSRTMatcher()
+    tracker = create_matcher(backend, fallback=True)
 
     ckpt_name = os.path.splitext(os.path.basename(checkpoint_path))[0]
     with _lock:
@@ -266,7 +266,7 @@ def _rl_tracker_loop(desired_dist_m, checkpoint_path):
                 py1, py2 = min(py1, py2), max(py1, py2)
 
                 if (px2 - px1) > 10 and (py2 - py1) > 10:
-                    csrt.set_reference_roi(frame, px1, py1, px2, py2)
+                    tracker.set_reference_roi(frame, px1, py1, px2, py2)
                     runner.reset()
                     has_reference = True
                     # Freeze stream briefly
@@ -294,7 +294,7 @@ def _rl_tracker_loop(desired_dist_m, checkpoint_path):
 
             if has_reference:
                 t_csrt = time.perf_counter()
-                bbox = csrt.find(frame)
+                bbox = tracker.find(frame)
                 csrt_ms = (time.perf_counter() - t_csrt) * 1000.0
                 if bbox is not None:
                     last_seen = now
@@ -432,7 +432,7 @@ def _rl_tracker_loop(desired_dist_m, checkpoint_path):
         if driving:
             udp_sock.sendto(b"S", udp_dest)
         udp_sock.close()
-        csrt.close()
+        tracker.close()
         if cap and not use_realsense:
             cap.release()
         with _lock:
@@ -452,6 +452,7 @@ class SetRefBody(BaseModel):
 class RLStartBody(BaseModel):
     desired_dist: float = Field(1.0, description="Target follow distance in meters")
     checkpoint: str = Field("", description="Model checkpoint path (empty = default)")
+    backend: str = Field("csrt", description="Tracker backend: csrt, orb, akaze, sift, lightglue")
 
 
 # ── Endpoints ─────────────────────────────────────────────────────────
@@ -469,11 +470,11 @@ def start_rl(body: RLStartBody = RLStartBody()):
     _stop_event.clear()
     _tracker_thread = threading.Thread(
         target=_rl_tracker_loop,
-        args=(body.desired_dist, checkpoint),
+        args=(body.desired_dist, checkpoint, body.backend),
         daemon=True,
     )
     _tracker_thread.start()
-    return {"ok": True, "desired_dist": body.desired_dist, "checkpoint": checkpoint}
+    return {"ok": True, "desired_dist": body.desired_dist, "checkpoint": checkpoint, "backend": body.backend}
 
 
 @router.post("/set_ref")

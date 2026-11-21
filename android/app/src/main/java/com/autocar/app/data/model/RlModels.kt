@@ -34,6 +34,16 @@ data class RlCheckpointList(
 data class RlStartBody(
     @SerialName("desired_dist") val desiredDist: Float = 1.0f,
     val checkpoint: String = "",
+    val backend: String = "csrt",
+)
+
+@Serializable
+data class SafetyStatus(
+    val enabled: Boolean = false,
+    @SerialName("lidar_connected") val lidarConnected: Boolean = false,
+    @SerialName("last_action") val lastAction: String = "unknown",
+    @SerialName("nearest_mm") val nearestMm: Int = -1,
+    @SerialName("receiver_online") val receiverOnline: Boolean = false,
 )
 
 @Serializable

@@ -27,6 +27,8 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.OutlinedTextFieldDefaults
+import androidx.compose.material3.Switch
+import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
@@ -60,7 +62,11 @@ fun RlViewport(
     val streamUrl by rlVm.streamUrl.collectAsState()
     val error by rlVm.error.collectAsState()
     val checkpoints by rlVm.checkpoints.collectAsState()
+    val safetyStatus by rlVm.safetyStatus.collectAsState()
     var selectedCheckpoint by remember { mutableStateOf("") }
+    var selectedBackend by remember { mutableStateOf("csrt") }
+
+    val backends = listOf("csrt", "orb", "akaze", "sift", "lightglue")
 
     DisposableEffect(Unit) {
         onDispose { rlVm.onTabHidden() }
@@ -242,8 +248,36 @@ fun RlViewport(
                     )
                 }
 
+                BackendSelector(
+                    backends = backends,
+                    selected = selectedBackend,
+                    onSelect = { selectedBackend = it },
+                )
+
+                // Safety toggle
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Column {
+                        Text("Safety Filter", style = MaterialTheme.typography.bodyMedium)
+                        Text(
+                            if (safetyStatus.enabled) "Enabled — nearest ${safetyStatus.nearestMm}mm"
+                            else "Disabled",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                    Switch(
+                        checked = safetyStatus.enabled,
+                        onCheckedChange = { rlVm.toggleSafety() },
+                        colors = SwitchDefaults.colors(checkedTrackColor = Gold),
+                    )
+                }
+
                 Button(
-                    onClick = { rlVm.start(checkpoint = selectedCheckpoint) },
+                    onClick = { rlVm.start(checkpoint = selectedCheckpoint, backend = selectedBackend) },
                     modifier = Modifier.fillMaxWidth(),
                     colors = ButtonDefaults.buttonColors(containerColor = Gold),
                 ) { Text("Start RL", fontWeight = FontWeight.Bold, color = Color.Black) }
@@ -472,6 +506,45 @@ private fun ModelSelector(
                 DropdownMenuItem(
                     text = { Text(ckpt.removeSuffix(".pt")) },
                     onClick = { onSelect(ckpt); expanded = false },
+                )
+            }
+        }
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun BackendSelector(
+    backends: List<String>,
+    selected: String,
+    onSelect: (String) -> Unit,
+) {
+    var expanded by remember { mutableStateOf(false) }
+
+    ExposedDropdownMenuBox(
+        expanded = expanded,
+        onExpandedChange = { expanded = it },
+    ) {
+        OutlinedTextField(
+            value = selected.uppercase(),
+            onValueChange = {},
+            readOnly = true,
+            label = { Text("Tracker") },
+            trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded) },
+            colors = OutlinedTextFieldDefaults.colors(
+                focusedBorderColor = Gold,
+                focusedLabelColor = Gold,
+            ),
+            modifier = Modifier.menuAnchor().fillMaxWidth(),
+        )
+        ExposedDropdownMenu(
+            expanded = expanded,
+            onDismissRequest = { expanded = false },
+        ) {
+            backends.forEach { backend ->
+                DropdownMenuItem(
+                    text = { Text(backend.uppercase()) },
+                    onClick = { onSelect(backend); expanded = false },
                 )
             }
         }

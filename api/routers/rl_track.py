@@ -112,9 +112,14 @@ def _scale_actions(raw_actions):
     Returns:
         (vx, vy, trans_speed, rot_speed) for the D packet.
     """
-    fwd = raw_actions[0] * FORWARD_SCALE
-    strafe = raw_actions[1] * STRAFE_SCALE
-    yaw = raw_actions[2] * YAW_SCALE
+    if len(raw_actions) == 2:
+        fwd = raw_actions[0] * FORWARD_SCALE
+        strafe = 0.0
+        yaw = raw_actions[1] * YAW_SCALE
+    else:
+        fwd = raw_actions[0] * FORWARD_SCALE
+        strafe = raw_actions[1] * STRAFE_SCALE
+        yaw = raw_actions[2] * YAW_SCALE
 
     # (fwd, strafe) → direction + magnitude, matching drive(vx, vy, speed, rot)
     magnitude = math.sqrt(fwd ** 2 + strafe ** 2)

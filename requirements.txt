@@ -2,10 +2,6 @@ opencv-python
 numpy
 python-dotenv
 pygame
-flask
-flask-cors
-python-can
-gs_usb
 pyserial
 pyrplidar
 pyrealsense2
@@ -13,3 +9,6 @@ fastapi
 uvicorn[standard]
 websockets
 scm-lightglue
+torch
+odrive
+mediapipe

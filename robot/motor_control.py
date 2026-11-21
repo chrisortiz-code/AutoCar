@@ -43,15 +43,18 @@ CURRENT_LIMIT = 30.0   # amps
 VEL_RAMP_RATE = 10.0   # turns/s^2 — how fast velocity changes (higher = snappier)
 SCAN_TIMEOUT  = 10     # seconds per ODrive discovery
 
-# ── Drive constants ─────────────────────────────────────────────────
-WHEEL_DIAMETER     = 11.75      # cm
-GEAR_RATIO         = 16.0 / 90.0
-CM_PER_MOTOR_REV   = GEAR_RATIO * math.pi * WHEEL_DIAMETER
-MOTOR_REVS_PER_CM  = 1.0 / CM_PER_MOTOR_REV
-TURNS_PER_DEG      = 0.067
+# ── Drive constants (from shared source of truth) ──────────────────
+try:
+    from robot.constants import (
+        WHEEL_DIAMETER, GEAR_RATIO, CM_PER_MOTOR_REV, MOTOR_REVS_PER_CM,
+        TURNS_PER_DEG, MOVE_TIMEOUT, RAMP_PCT,
+    )
+except ImportError:
+    from constants import (
+        WHEEL_DIAMETER, GEAR_RATIO, CM_PER_MOTOR_REV, MOTOR_REVS_PER_CM,
+        TURNS_PER_DEG, MOVE_TIMEOUT, RAMP_PCT,
+    )
 POS_TOLERANCE      = 0.1
-MOVE_TIMEOUT       = 30
-RAMP_PCT           = 0.15
 
 DIFF_DRIVE_ROLES = ["FL", "FR"]
 

@@ -34,18 +34,11 @@ MAX_VEL = 10.0  # turns/s
 # Diff-drive flag — set by api server at startup
 diff_drive = False
 
-# ── Physical constants ───────────────────────────────────────────────
-WHEEL_DIAMETER = 9.55       # cm (effective — tuned empirically)
-GEAR_RATIO = 16.0 / 90.0   # motor:wheel
-CM_PER_MOTOR_REV = GEAR_RATIO * math.pi * WHEEL_DIAMETER  # ~6.424 cm
-MOTOR_REVS_PER_CM = 1.0 / CM_PER_MOTOR_REV
-
-TURNS_PER_DEG = 0.072       # motor turns per degree of robot rotation
-MOVE_TIMEOUT = 30            # seconds — safety timeout
-RAMP_PCT = 0.15              # ramp over first/last 15% of travel time
-RAMP_MIN = 0.1               # minimum ramp fraction (10% of peak)
-_RAMP_AVG = 1.0 - 2 * RAMP_PCT + 2 * RAMP_PCT * (RAMP_MIN + 1.0) / 2  # ~0.865
-MOTOR_REVS_PER_CM_COMP = MOTOR_REVS_PER_CM / _RAMP_AVG  # ramp-compensated
+# ── Physical constants (from shared source of truth) ────────────────
+from robot.constants import (
+    WHEEL_DIAMETER, GEAR_RATIO, CM_PER_MOTOR_REV, MOTOR_REVS_PER_CM,
+    TURNS_PER_DEG, MOVE_TIMEOUT, RAMP_PCT, RAMP_MIN, MOTOR_REVS_PER_CM_COMP,
+)
 
 # ── UDP socket ────────────────────────────────────────────────────────
 UDP_HOST = os.getenv("ROBOT_IP", "127.0.0.1")

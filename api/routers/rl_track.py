@@ -40,6 +40,14 @@ _state = {
     "desired_dist": 1.0,
     "target_depth": 0,      # mm
     "cur_depth": 0,          # mm
+    "csrt_ms": 0.0,
+    "preprocess_ms": 0.0,
+    "policy_ms": 0.0,
+    "total_ms": 0.0,
+    "motor_cmd": [0.0, 0.0, 0.0, 0.0],
+    "model_variant": "",
+    "action_dim": 3,
+    "safety_active": False,
 }
 _tracker_thread = None
 _stop_event = threading.Event()
@@ -163,6 +171,10 @@ def _rl_tracker_loop(desired_dist_m, checkpoint_path):
     csrt = CSRTMatcher()
 
     with _lock:
+        _state["model_variant"] = (
+            "depth" if runner.model.cnn_channels == 1 else "rgbd"
+        ) + f"_{runner.model.action_dim}a"
+        _state["action_dim"] = runner.action_dim
         _state["status_msg"] = "Connecting camera..."
 
     use_realsense = _camera_reader is not None and _camera_reader.connected
@@ -272,7 +284,9 @@ def _rl_tracker_loop(desired_dist_m, checkpoint_path):
             bbox = None
 
             if has_reference:
+                t_csrt = time.perf_counter()
                 bbox = csrt.find(frame)
+                csrt_ms = (time.perf_counter() - t_csrt) * 1000.0
                 if bbox is not None:
                     last_seen = now
 
@@ -291,13 +305,16 @@ def _rl_tracker_loop(desired_dist_m, checkpoint_path):
                         if depth_frame is None:
                             depth_frame = np.zeros((fh, fw), dtype=np.uint16)
 
+                        t_pre = time.perf_counter()
                         # Run policy
                         raw_actions = runner.step(
                             frame, depth_frame, bbox, scan_points, desired_dist_m,
                         )
+                        policy_ms = (time.perf_counter() - t_pre) * 1000.0
 
                         # Scale actions to motor commands
                         vx, vy, trans_speed, rot_speed = _scale_actions(raw_actions)
+                        motor_cmd = [vx, vy, trans_speed, rot_speed]
 
                         if abs(trans_speed) < 0.01 and abs(rot_speed) < 0.01:
                             if driving:
@@ -321,6 +338,7 @@ def _rl_tracker_loop(desired_dist_m, checkpoint_path):
                             valid = roi[roi > 0]
                             cur_depth = int(np.median(valid)) if len(valid) > 0 else 0
 
+                        total_ms = csrt_ms + policy_ms
                         with _lock:
                             _state.update(
                                 status="tracking",
@@ -328,6 +346,11 @@ def _rl_tracker_loop(desired_dist_m, checkpoint_path):
                                 actions=raw_actions,
                                 lstm_step=runner.step_count,
                                 cur_depth=cur_depth,
+                                csrt_ms=round(csrt_ms, 1),
+                                policy_ms=round(policy_ms, 1),
+                                total_ms=round(total_ms, 1),
+                                motor_cmd=motor_cmd,
+                                safety_active=False,
                             )
                     else:
                         # Target lost — graduated fallback

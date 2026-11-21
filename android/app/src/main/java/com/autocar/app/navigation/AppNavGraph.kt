@@ -26,6 +26,7 @@ import androidx.compose.material.icons.filled.Face
 import androidx.compose.material.icons.filled.Gamepad
 import androidx.compose.material.icons.filled.Route
 import androidx.compose.material.icons.filled.CenterFocusStrong
+import androidx.compose.material.icons.filled.SmartToy
 import androidx.compose.material.icons.filled.Palette
 import androidx.compose.material.icons.filled.Sensors
 import androidx.compose.material.icons.filled.Settings
@@ -72,6 +73,7 @@ import com.autocar.app.ui.components.MjpegView
 import com.autocar.app.ui.components.ColorViewport
 import com.autocar.app.ui.components.ConfigViewport
 import com.autocar.app.ui.components.ObjectTrackViewport
+import com.autocar.app.ui.components.RlViewport
 import com.autocar.app.ui.components.TerminalViewport
 import com.autocar.app.ui.components.SensorViewport
 import com.autocar.app.ui.components.SidePanel
@@ -91,12 +93,14 @@ import com.autocar.app.viewmodel.SensorsViewModel
 import com.autocar.app.viewmodel.SettingsViewModel
 import com.autocar.app.viewmodel.ColorViewModel
 import com.autocar.app.viewmodel.TerminalViewModel
+import com.autocar.app.viewmodel.RlViewModel
 import com.autocar.app.viewmodel.TrackViewModel
 
 enum class NavTab(val label: String, val icon: ImageVector) {
     Sensors("Sensors", Icons.Default.Sensors),
     Face("Face", Icons.Default.Face),
     Track("Track", Icons.Default.CenterFocusStrong),
+    Rl("RL", Icons.Default.SmartToy),
     Color("Color", Icons.Default.Palette),
     Config("Config", Icons.Default.Settings),
     Drive("Drive", Icons.Default.Gamepad),
@@ -108,6 +112,7 @@ private enum class Viewport(val label: String, val icon: ImageVector) {
     Sensors("Sensors", Icons.Default.Sensors),
     Face("Face", Icons.Default.Face),
     Track("Track", Icons.Default.CenterFocusStrong),
+    Rl("RL", Icons.Default.SmartToy),
     Color("Color", Icons.Default.Palette),
     Config("Config", Icons.Default.Settings),
 }
@@ -163,6 +168,7 @@ fun AppNavGraph(
     // ViewModels shared with GamepadNavEffect
     val faceVm: FaceViewModel = viewModel()
     val trackVm: TrackViewModel = viewModel()
+    val rlVm: RlViewModel = viewModel()
     val colorVm: ColorViewModel = viewModel()
     val driveVm: DriveViewModel = viewModel()
     val pathsVm: PathsViewModel = viewModel()
@@ -238,6 +244,7 @@ fun AppNavGraph(
                         selectedTab = selectedTab,
                         faceVm = faceVm,
                         trackVm = trackVm,
+                        rlVm = rlVm,
                         colorVm = colorVm,
                         driveVm = driveVm,
                         pathsVm = pathsVm,
@@ -266,6 +273,7 @@ fun AppNavGraph(
                         selectedTab = selectedTab,
                         faceVm = faceVm,
                         trackVm = trackVm,
+                        rlVm = rlVm,
                         colorVm = colorVm,
                         driveVm = driveVm,
                         pathsVm = pathsVm,
@@ -294,6 +302,7 @@ fun AppNavGraph(
                     onTabChange = { selectedTab = it },
                     faceVm = faceVm,
                     trackVm = trackVm,
+                    rlVm = rlVm,
                     colorVm = colorVm,
                     driveVm = driveVm,
                     pathsVm = pathsVm,
@@ -383,6 +392,7 @@ private fun ColumnScope.TabletLandscapeLayout(
     selectedTab: NavTab,
     faceVm: FaceViewModel,
     trackVm: TrackViewModel,
+    rlVm: RlViewModel,
     colorVm: ColorViewModel,
     driveVm: DriveViewModel,
     pathsVm: PathsViewModel,
@@ -412,6 +422,7 @@ private fun ColumnScope.TabletLandscapeLayout(
             NavTab.Sensors -> { viewport = Viewport.Sensors; onActiveTabChange(null) }
             NavTab.Face -> { viewport = Viewport.Face; onActiveTabChange(null) }
             NavTab.Track -> { viewport = Viewport.Track; onActiveTabChange(null) }
+            NavTab.Rl -> { viewport = Viewport.Rl; onActiveTabChange(null) }
             NavTab.Color -> { viewport = Viewport.Color; onActiveTabChange(null) }
             NavTab.Config -> { viewport = Viewport.Config; onActiveTabChange(null) }
             NavTab.Drive -> onActiveTabChange(NavTab.Drive)
@@ -478,6 +489,7 @@ private fun ColumnScope.TabletLandscapeLayout(
                     selectedMode = trackMode,
                     onModeChange = onTrackModeChange,
                 )
+                Viewport.Rl -> RlViewport(rlVm = rlVm)
                 Viewport.Color -> ColorViewport(
                     colorVm = colorVm,
                     selectedMode = colorMode,
@@ -547,6 +559,7 @@ private fun ColumnScope.GridLayout(
     selectedTab: NavTab,
     faceVm: FaceViewModel,
     trackVm: TrackViewModel,
+    rlVm: RlViewModel,
     colorVm: ColorViewModel,
     driveVm: DriveViewModel,
     pathsVm: PathsViewModel,
@@ -586,6 +599,7 @@ private fun ColumnScope.GridLayout(
             NavTab.Sensors -> { viewport = Viewport.Sensors; onExpandedCellChange(null) }
             NavTab.Face -> { viewport = Viewport.Face; onExpandedCellChange(null) }
             NavTab.Track -> { viewport = Viewport.Track; onExpandedCellChange(null) }
+            NavTab.Rl -> { viewport = Viewport.Rl; onExpandedCellChange(null) }
             NavTab.Color -> { viewport = Viewport.Color; onExpandedCellChange(null) }
             NavTab.Config -> { viewport = Viewport.Config; onExpandedCellChange(null) }
             NavTab.Drive -> { onExpandedCellChange(GridCell.Panel); onPanelTabChange(0) }
@@ -720,6 +734,9 @@ private fun ColumnScope.GridLayout(
                     onModeChange = onTrackModeChange,
                 )
             }
+            Viewport.Rl -> Box(modifier = Modifier.weight(1f)) {
+                RlViewport(rlVm = rlVm)
+            }
             Viewport.Color -> Box(modifier = Modifier.weight(1f)) {
                 ColorViewport(
                     colorVm = colorVm,
@@ -852,6 +869,7 @@ private fun ColumnScope.PhoneLayout(
     onTabChange: (NavTab) -> Unit,
     faceVm: FaceViewModel,
     trackVm: TrackViewModel,
+    rlVm: RlViewModel,
     colorVm: ColorViewModel,
     driveVm: DriveViewModel,
     pathsVm: PathsViewModel,
@@ -887,6 +905,7 @@ private fun ColumnScope.PhoneLayout(
                 selectedMode = trackMode,
                 onModeChange = onTrackModeChange,
             )
+            NavTab.Rl -> RlViewport(rlVm = rlVm)
             NavTab.Color -> ColorViewport(
                 colorVm = colorVm,
                 selectedMode = colorMode,

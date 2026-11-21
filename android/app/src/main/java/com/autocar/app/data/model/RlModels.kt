@@ -20,6 +20,7 @@ data class RlState(
     @SerialName("total_ms") val totalMs: Float = 0f,
     @SerialName("motor_cmd") val motorCmd: List<Float> = listOf(0f, 0f, 0f, 0f),
     @SerialName("model_variant") val modelVariant: String = "",
+    @SerialName("model_name") val modelName: String = "",
     @SerialName("action_dim") val actionDim: Int = 3,
     @SerialName("safety_active") val safetyActive: Boolean = false,
 )

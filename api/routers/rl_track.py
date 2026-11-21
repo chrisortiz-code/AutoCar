@@ -46,6 +46,7 @@ _state = {
     "total_ms": 0.0,
     "motor_cmd": [0.0, 0.0, 0.0, 0.0],
     "model_variant": "",
+    "model_name": "",
     "action_dim": 3,
     "safety_active": False,
 }
@@ -88,10 +89,16 @@ MAX_RANGE_SPEED = 5.0
 COAST_TIMEOUT = 0.5     # seconds: coast on last command
 STOP_TIMEOUT = 2.0      # seconds: stop and reset LSTM
 
-# Default model checkpoint path
-DEFAULT_CHECKPOINT = os.path.join(
-    os.path.dirname(__file__), "..", "..", "rl_policy", "checkpoints", "model_best.pt"
-)
+# Default model checkpoint — first non-traced .pt in checkpoints/
+_CKPT_DIR = os.path.join(os.path.dirname(__file__), "..", "..", "rl_policy", "checkpoints")
+DEFAULT_CHECKPOINT = ""
+if os.path.isdir(_CKPT_DIR):
+    _candidates = sorted(
+        f for f in os.listdir(_CKPT_DIR)
+        if f.endswith(".pt") and "_traced" not in f
+    )
+    if _candidates:
+        DEFAULT_CHECKPOINT = os.path.join(_CKPT_DIR, _candidates[0])
 
 
 def _clamp(value, low, high):
@@ -170,10 +177,12 @@ def _rl_tracker_loop(desired_dist_m, checkpoint_path):
     runner = PolicyRunner(checkpoint_path, device=device)
     csrt = CSRTMatcher()
 
+    ckpt_name = os.path.splitext(os.path.basename(checkpoint_path))[0]
     with _lock:
         _state["model_variant"] = (
             "depth" if runner.model.cnn_channels == 1 else "rgbd"
         ) + f"_{runner.model.action_dim}a"
+        _state["model_name"] = ckpt_name
         _state["action_dim"] = runner.action_dim
         _state["status_msg"] = "Connecting camera..."
 

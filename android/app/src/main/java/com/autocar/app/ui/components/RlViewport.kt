@@ -103,12 +103,12 @@ fun RlViewport(
                 }
 
                 // Model info
-                if (rlState.modelVariant.isNotEmpty()) {
+                if (rlState.modelVariant.isNotEmpty() || rlState.modelName.isNotEmpty()) {
                     Row(
                         modifier = Modifier.fillMaxWidth(),
                         horizontalArrangement = Arrangement.SpaceEvenly,
                     ) {
-                        StatCell("Model", rlState.modelVariant)
+                        StatCell("Model", rlState.modelName.ifEmpty { rlState.modelVariant })
                         StatCell("Actions", "${rlState.actionDim}D")
                         StatCell("LSTM", "#${rlState.lstmStep}")
                         StatCell("FPS", "%.1f".format(rlState.fps))

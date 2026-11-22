@@ -1,6 +1,7 @@
 package com.autocar.app.data.api
 
 import com.autocar.app.data.model.ApiResult
+import com.autocar.app.data.model.LidarScanResult
 import com.autocar.app.data.model.RlCheckpointList
 import com.autocar.app.data.model.RlSetRefBody
 import com.autocar.app.data.model.RlStartBody
@@ -37,4 +38,7 @@ interface RlApi {
 
     @GET("api/safety/status")
     suspend fun safetyStatus(): SafetyStatus
+
+    @GET("api/sensors/lidar/scan")
+    suspend fun lidarScan(): LidarScanResult
 }

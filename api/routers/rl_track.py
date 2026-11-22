@@ -55,6 +55,7 @@ _stop_event = threading.Event()
 _bbox_queue = []
 _reset_flag = False
 _latest_jpeg = None
+_latest_depth_jpeg = None
 _camera_reader = None
 _lidar_reader = None
 
@@ -155,7 +156,7 @@ def _scale_actions(raw_actions):
 # ── Tracker thread ────────────────────────────────────────────────────
 
 def _rl_tracker_loop(desired_dist_m, checkpoint_path, backend="csrt"):
-    global _latest_jpeg, _reset_flag
+    global _latest_jpeg, _latest_depth_jpeg, _reset_flag
 
     with _lock:
         _state["status"] = "loading"
@@ -412,6 +413,30 @@ def _rl_tracker_loop(desired_dist_m, checkpoint_path, backend="csrt"):
             elif has_reference:
                 _draw_text(display, "TARGET LOST", (8, 20), (0, 0, 255))
 
+            # ── Annotated depth feed ──
+            if depth_frame is not None:
+                depth_norm = np.clip(depth_frame.astype(np.float32) / 10000.0, 0, 1)
+                depth_color = cv2.applyColorMap(
+                    (depth_norm * 255).astype(np.uint8), cv2.COLORMAP_TURBO,
+                )
+                if bbox is not None:
+                    dbx1 = max(0, int((bbox.cx - bbox.w / 2) * fw))
+                    dby1 = max(0, int((bbox.cy - bbox.h / 2) * fh))
+                    dbx2 = min(fw, int((bbox.cx + bbox.w / 2) * fw))
+                    dby2 = min(fh, int((bbox.cy + bbox.h / 2) * fh))
+                    overlay_d = depth_color.copy()
+                    overlay_d[dby1:dby2, dbx1:dbx2] = (0, 255, 0)
+                    cv2.addWeighted(overlay_d, 0.3, depth_color, 0.7, 0, depth_color)
+                    cv2.rectangle(depth_color, (dbx1, dby1), (dbx2, dby2), (0, 255, 0), 2)
+                    with _lock:
+                        cdepth = _state["cur_depth"]
+                    if cdepth > 0:
+                        _draw_text(depth_color, f"{cdepth / 1000:.2f}m",
+                                   (dbx1, dby2 + 16), (0, 255, 0))
+                _, dbuf = cv2.imencode(".jpg", depth_color, [cv2.IMWRITE_JPEG_QUALITY, 70])
+                with _lock:
+                    _latest_depth_jpeg = dbuf.tobytes()
+
             # Encode JPEG for stream
             _, buf = cv2.imencode(".jpg", display, [cv2.IMWRITE_JPEG_QUALITY, 70])
             with _lock:
@@ -523,6 +548,25 @@ def rl_stream():
         while True:
             with _lock:
                 jpeg = _latest_jpeg
+            if jpeg:
+                yield (
+                    b"--frame\r\n"
+                    b"Content-Type: image/jpeg\r\n\r\n" + jpeg + b"\r\n"
+                )
+            time.sleep(1.0 / 15)
+
+    return StreamingResponse(
+        _generate(),
+        media_type="multipart/x-mixed-replace; boundary=frame",
+    )
+
+
+@stream_router.get("/depth_stream")
+def rl_depth_stream():
+    def _generate():
+        while True:
+            with _lock:
+                jpeg = _latest_depth_jpeg
             if jpeg:
                 yield (
                     b"--frame\r\n"

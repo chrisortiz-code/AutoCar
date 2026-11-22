@@ -47,6 +47,20 @@ data class SafetyStatus(
 )
 
 @Serializable
+data class LidarScanResult(
+    val points: List<LidarScanPoint> = emptyList(),
+    @SerialName("min_mm") val minMm: Int? = null,
+    @SerialName("max_mm") val maxMm: Int? = null,
+)
+
+@Serializable
+data class LidarScanPoint(
+    val angle: Float = 0f,
+    @SerialName("dist_mm") val distMm: Float = 0f,
+    val quality: Int = 0,
+)
+
+@Serializable
 data class RlSetRefBody(
     val x1: Float,
     val y1: Float,

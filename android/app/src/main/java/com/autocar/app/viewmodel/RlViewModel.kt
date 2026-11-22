@@ -5,6 +5,7 @@ import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.autocar.app.data.api.ApiClient
 import com.autocar.app.data.api.RlApi
+import com.autocar.app.data.model.LidarScanPoint
 import com.autocar.app.data.model.RlSetRefBody
 import com.autocar.app.data.model.RlStartBody
 import com.autocar.app.data.model.RlState
@@ -28,6 +29,9 @@ class RlViewModel(app: Application) : AndroidViewModel(app) {
     private val _streamUrl = MutableStateFlow("")
     val streamUrl: StateFlow<String> = _streamUrl.asStateFlow()
 
+    private val _depthStreamUrl = MutableStateFlow("")
+    val depthStreamUrl: StateFlow<String> = _depthStreamUrl.asStateFlow()
+
     private val _error = MutableStateFlow<String?>(null)
     val error: StateFlow<String?> = _error.asStateFlow()
 
@@ -37,7 +41,11 @@ class RlViewModel(app: Application) : AndroidViewModel(app) {
     private val _safetyStatus = MutableStateFlow(SafetyStatus())
     val safetyStatus: StateFlow<SafetyStatus> = _safetyStatus.asStateFlow()
 
+    private val _lidarPoints = MutableStateFlow<List<LidarScanPoint>>(emptyList())
+    val lidarPoints: StateFlow<List<LidarScanPoint>> = _lidarPoints.asStateFlow()
+
     private var pollingJob: Job? = null
+    private var lidarJob: Job? = null
 
     init {
         fetchCheckpoints()
@@ -82,20 +90,37 @@ class RlViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
+    private fun startLidarPolling() {
+        lidarJob?.cancel()
+        lidarJob = viewModelScope.launch {
+            while (true) {
+                try {
+                    _lidarPoints.value = api().lidarScan().points
+                } catch (_: Exception) {}
+                delay(250)
+            }
+        }
+    }
+
     private fun stopPolling() {
         pollingJob?.cancel()
         pollingJob = null
+        lidarJob?.cancel()
+        lidarJob = null
     }
 
     fun start(desiredDist: Float = 1.0f, checkpoint: String = "", backend: String = "csrt") = viewModelScope.launch {
         try {
             val baseUrl = store.baseUrl.first()
-            _streamUrl.value = baseUrl.trimEnd('/') + "/api/rl/stream"
+            val base = baseUrl.trimEnd('/')
+            _streamUrl.value = "$base/api/rl/stream"
+            _depthStreamUrl.value = "$base/api/rl/depth_stream"
             val ckptPath = if (checkpoint.isNotEmpty())
                 "rl_policy/checkpoints/$checkpoint" else ""
             api().start(RlStartBody(desiredDist = desiredDist, checkpoint = ckptPath, backend = backend))
             _error.value = null
             startPolling()
+            startLidarPolling()
         } catch (e: Exception) {
             _error.value = e.message
         }
@@ -108,6 +133,7 @@ class RlViewModel(app: Application) : AndroidViewModel(app) {
             stopPolling()
             _rlState.value = RlState()
             _streamUrl.value = ""
+            _depthStreamUrl.value = ""
         } catch (e: Exception) {
             _error.value = e.message
         }

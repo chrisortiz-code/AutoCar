@@ -47,6 +47,7 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.viewmodel.compose.viewModel
+import com.autocar.app.data.model.LidarPoint
 import com.autocar.app.ui.theme.Gold
 import com.autocar.app.ui.theme.StatusGreen
 import com.autocar.app.ui.theme.StatusRed
@@ -60,9 +61,11 @@ fun RlViewport(
 ) {
     val rlState by rlVm.rlState.collectAsState()
     val streamUrl by rlVm.streamUrl.collectAsState()
+    val depthStreamUrl by rlVm.depthStreamUrl.collectAsState()
     val error by rlVm.error.collectAsState()
     val checkpoints by rlVm.checkpoints.collectAsState()
     val safetyStatus by rlVm.safetyStatus.collectAsState()
+    val lidarPoints by rlVm.lidarPoints.collectAsState()
     var selectedCheckpoint by remember { mutableStateOf("") }
     var selectedBackend by remember { mutableStateOf("csrt") }
 
@@ -77,20 +80,98 @@ fun RlViewport(
     val isLoading = status == "loading"
     val isStreaming = status == "streaming"
 
-    if (!isIdle && !isLoading && status != "") {
-        // ── Active: stream + telemetry overlay ──
-        Box(modifier = modifier.fillMaxSize()) {
-            DraggableMjpegView(
-                url = streamUrl,
-                draggable = isStreaming,
-                onBoxDrawn = { x1, y1, x2, y2 ->
-                    rlVm.setReference(x1, y1, x2, y2)
-                },
-                modifier = Modifier.fillMaxSize(),
-            )
+    val lidarForPlot = remember(lidarPoints) {
+        lidarPoints.map { LidarPoint(angle = it.angle, dist_mm = it.distMm, quality = it.quality) }
+    }
 
-            Box(modifier = Modifier.align(Alignment.TopEnd).padding(8.dp)) {
-                RlStatusChip(status)
+    if (!isIdle && !isLoading && status != "") {
+        // ── Active: RGB stream, depth+lidar, telemetry ──
+        Column(
+            modifier = modifier
+                .fillMaxSize()
+                .verticalScroll(rememberScrollState()),
+        ) {
+            // RGB stream with bbox drawing
+            Box(modifier = Modifier.fillMaxWidth().height(260.dp)) {
+                DraggableMjpegView(
+                    url = streamUrl,
+                    draggable = isStreaming,
+                    onBoxDrawn = { x1, y1, x2, y2 ->
+                        rlVm.setReference(x1, y1, x2, y2)
+                    },
+                    modifier = Modifier.fillMaxSize(),
+                )
+                Box(modifier = Modifier.align(Alignment.TopEnd).padding(8.dp)) {
+                    RlStatusChip(status)
+                }
+                if (isStreaming) {
+                    Text(
+                        text = "Draw box on target",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = Gold,
+                        modifier = Modifier.align(Alignment.TopStart).padding(8.dp),
+                    )
+                }
+            }
+
+            // Depth + LiDAR row
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(180.dp)
+                    .padding(horizontal = 4.dp, vertical = 4.dp),
+                horizontalArrangement = Arrangement.spacedBy(4.dp),
+            ) {
+                // Annotated depth feed
+                Box(
+                    modifier = Modifier
+                        .weight(1f)
+                        .fillMaxHeight()
+                        .clip(RoundedCornerShape(8.dp))
+                        .border(1.dp, Gold.copy(alpha = 0.4f), RoundedCornerShape(8.dp)),
+                ) {
+                    if (depthStreamUrl.isNotEmpty()) {
+                        MjpegView(
+                            url = depthStreamUrl,
+                            modifier = Modifier.fillMaxSize(),
+                        )
+                    }
+                    Text(
+                        "DEPTH",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = Gold,
+                        modifier = Modifier.align(Alignment.TopStart).padding(4.dp),
+                    )
+                }
+                // LiDAR polar plot
+                Box(
+                    modifier = Modifier
+                        .weight(1f)
+                        .fillMaxHeight()
+                        .clip(RoundedCornerShape(8.dp))
+                        .background(Color(0xFF0A0A14))
+                        .border(1.dp, Gold.copy(alpha = 0.4f), RoundedCornerShape(8.dp)),
+                ) {
+                    if (lidarForPlot.isNotEmpty()) {
+                        LidarPolarPlot(
+                            points = lidarForPlot,
+                            modifier = Modifier.fillMaxSize().padding(4.dp),
+                        )
+                    } else {
+                        Text(
+                            "No LiDAR",
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            style = MaterialTheme.typography.bodySmall,
+                            modifier = Modifier.align(Alignment.Center),
+                        )
+                    }
+                    Text(
+                        "LIDAR",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = Gold,
+                        modifier = Modifier.align(Alignment.TopStart).padding(4.dp),
+                    )
+                }
             }
 
             if (error != null) {
@@ -98,27 +179,18 @@ fun RlViewport(
                     text = "Error: $error",
                     color = StatusRed,
                     style = MaterialTheme.typography.bodySmall,
-                    modifier = Modifier.align(Alignment.TopStart).padding(8.dp),
+                    modifier = Modifier.padding(horizontal = 8.dp),
                 )
             }
 
-            // ── Telemetry footer ──
+            // ── Telemetry section ──
             Column(
                 modifier = Modifier
-                    .align(Alignment.BottomCenter)
                     .fillMaxWidth()
                     .background(MaterialTheme.colorScheme.surface.copy(alpha = 0.9f))
                     .padding(horizontal = 8.dp, vertical = 6.dp),
                 verticalArrangement = Arrangement.spacedBy(6.dp),
             ) {
-                if (isStreaming) {
-                    Text(
-                        text = "Draw a box around the target to track",
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = Gold,
-                    )
-                }
-
                 // Model info
                 if (rlState.modelVariant.isNotEmpty() || rlState.modelName.isNotEmpty()) {
                     Row(

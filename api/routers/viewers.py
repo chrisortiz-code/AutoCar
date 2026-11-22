@@ -546,7 +546,7 @@ h1{color:#c8a94e;font-size:1.2rem;margin-bottom:8px}
 .row{display:flex;gap:6px;margin-bottom:6px;flex-wrap:wrap}
 .col{flex:1;min-width:0}
 .feed-box{position:relative;background:#111;border:1px solid #c8a94e44;border-radius:8px;overflow:hidden}
-.feed-box img{width:100%;height:100%;object-fit:contain;display:block}
+.feed-box img{width:100%;height:100%;object-fit:fill;display:block}
 .feed-label{position:absolute;top:4px;left:6px;font-size:11px;color:#c8a94e;font-weight:600;z-index:2;
   text-shadow:0 0 4px #000}
 .feed-box.rgb{height:260px;cursor:crosshair}
@@ -836,95 +836,51 @@ function stat(label,val){
 }
 
 // ── Bbox drawing on RGB canvas ──
-// The image uses object-fit:contain, so we must map canvas coords
-// to the actual image content rect (excluding letterbox bars).
+// Image uses object-fit:fill so it stretches to match the container exactly.
+// Canvas coords map 1:1 to normalized image coords.
 const drawCanvas = document.getElementById('draw-canvas');
 const drawCtx = drawCanvas.getContext('2d');
-const rgbImg = document.getElementById('img-rgb');
 let drawing=false, sx=0, sy=0;
 
-function imageRect(){
-  // Compute the rendered image rect within the container
-  // accounting for object-fit: contain letterboxing
-  const box = rgbImg.getBoundingClientRect();
-  const natW = rgbImg.naturalWidth || 640;
-  const natH = rgbImg.naturalHeight || 480;
-  const scale = Math.min(box.width/natW, box.height/natH);
-  const imgW = natW*scale, imgH = natH*scale;
-  const offX = (box.width-imgW)/2, offY = (box.height-imgH)/2;
-  return {left: box.left+offX, top: box.top+offY, width: imgW, height: imgH};
+function normCoords(e){
+  const r = drawCanvas.getBoundingClientRect();
+  return [
+    Math.max(0, Math.min(1, (e.clientX-r.left)/r.width)),
+    Math.max(0, Math.min(1, (e.clientY-r.top)/r.height))
+  ];
 }
 
-function imgCoords(e){
-  const r = imageRect();
-  const x = Math.max(0, Math.min(1, (e.clientX-r.left)/r.width));
-  const y = Math.max(0, Math.min(1, (e.clientY-r.top)/r.height));
-  return [x, y];
+function syncCanvasSize(){
+  const r = drawCanvas.getBoundingClientRect();
+  drawCanvas.width = r.width;
+  drawCanvas.height = r.height;
 }
 
-drawCanvas.onmousedown = e=>{ drawing=true; [sx,sy]=imgCoords(e); };
-drawCanvas.onmousemove = e=>{
-  if(!drawing) return;
-  const [cx,cy] = imgCoords(e);
-  const cRect = drawCanvas.getBoundingClientRect();
-  drawCanvas.width = cRect.width; drawCanvas.height = cRect.height;
-  // Draw the selection rect mapped back to canvas pixels
-  const ir = imageRect();
-  const offX = ir.left - cRect.left, offY = ir.top - cRect.top;
+function drawRect(nx1,ny1,nx2,ny2){
+  syncCanvasSize();
+  const w = drawCanvas.width, h = drawCanvas.height;
   drawCtx.strokeStyle='#0f0'; drawCtx.lineWidth=2; drawCtx.setLineDash([6,4]);
-  drawCtx.strokeRect(
-    offX + sx*ir.width, offY + sy*ir.height,
-    (cx-sx)*ir.width, (cy-sy)*ir.height
-  );
-};
-drawCanvas.onmouseup = e=>{
-  if(!drawing) return; drawing=false;
-  const [ex,ey] = imgCoords(e);
-  const x1=Math.min(sx,ex), y1=Math.min(sy,ey), x2=Math.max(sx,ex), y2=Math.max(sy,ey);
+  drawCtx.strokeRect(nx1*w, ny1*h, (nx2-nx1)*w, (ny2-ny1)*h);
+}
+
+function sendBox(nx1,ny1,nx2,ny2){
+  const x1=Math.min(nx1,nx2), y1=Math.min(ny1,ny2);
+  const x2=Math.max(nx1,nx2), y2=Math.max(ny1,ny2);
   if (x2-x1>0.02 && y2-y1>0.02){
     fetch(BASE+'/api/rl/set_ref',{method:'POST',
       headers:{'Content-Type':'application/json'},
       body:JSON.stringify({x1,y1,x2,y2})});
   }
-  const cRect = drawCanvas.getBoundingClientRect();
-  drawCanvas.width = cRect.width; drawCanvas.height = cRect.height;
-};
+  syncCanvasSize();
+}
 
-// Touch support for mobile browsers
-drawCanvas.ontouchstart = e=>{
-  e.preventDefault();
-  const t = e.touches[0];
-  drawing=true; [sx,sy]=imgCoords(t);
-};
-drawCanvas.ontouchmove = e=>{
-  e.preventDefault();
-  if(!drawing) return;
-  const t = e.touches[0];
-  const [cx,cy] = imgCoords(t);
-  const cRect = drawCanvas.getBoundingClientRect();
-  drawCanvas.width = cRect.width; drawCanvas.height = cRect.height;
-  const ir = imageRect();
-  const offX = ir.left - cRect.left, offY = ir.top - cRect.top;
-  drawCtx.strokeStyle='#0f0'; drawCtx.lineWidth=2; drawCtx.setLineDash([6,4]);
-  drawCtx.strokeRect(
-    offX + sx*ir.width, offY + sy*ir.height,
-    (cx-sx)*ir.width, (cy-sy)*ir.height
-  );
-};
-drawCanvas.ontouchend = e=>{
-  e.preventDefault();
-  if(!drawing) return; drawing=false;
-  const t = e.changedTouches[0];
-  const [ex,ey] = imgCoords(t);
-  const x1=Math.min(sx,ex), y1=Math.min(sy,ey), x2=Math.max(sx,ex), y2=Math.max(sy,ey);
-  if (x2-x1>0.02 && y2-y1>0.02){
-    fetch(BASE+'/api/rl/set_ref',{method:'POST',
-      headers:{'Content-Type':'application/json'},
-      body:JSON.stringify({x1,y1,x2,y2})});
-  }
-  const cRect = drawCanvas.getBoundingClientRect();
-  drawCanvas.width = cRect.width; drawCanvas.height = cRect.height;
-};
+drawCanvas.onmousedown = e=>{ drawing=true; [sx,sy]=normCoords(e); };
+drawCanvas.onmousemove = e=>{ if(drawing){ const [cx,cy]=normCoords(e); drawRect(sx,sy,cx,cy); }};
+drawCanvas.onmouseup = e=>{ if(!drawing) return; drawing=false; const [ex,ey]=normCoords(e); sendBox(sx,sy,ex,ey); };
+
+drawCanvas.ontouchstart = e=>{ e.preventDefault(); drawing=true; [sx,sy]=normCoords(e.touches[0]); };
+drawCanvas.ontouchmove = e=>{ e.preventDefault(); if(drawing){ const [cx,cy]=normCoords(e.touches[0]); drawRect(sx,sy,cx,cy); }};
+drawCanvas.ontouchend = e=>{ e.preventDefault(); if(!drawing) return; drawing=false; const [ex,ey]=normCoords(e.changedTouches[0]); sendBox(sx,sy,ex,ey); };
 
 // ── LiDAR polar plot ──
 function startLidarPolling(){

@@ -3,8 +3,12 @@ Shared CAN / ODrive / mecanum motor interface.
 Import this from any control system (server, ps4, future controllers).
 """
 
+import fcntl
+import glob
 import math
+import os
 import struct
+import subprocess
 import threading
 import time
 import gc
@@ -34,6 +38,9 @@ MAX_VEL       = 10.0   # turns/s velocity limit
 CURRENT_LIMIT = 30.0   # amps
 CAN_BITRATE    = 1000000
 SCAN_ATTEMPTS  = 5
+SEND_FAIL_THRESHOLD = 5   # consecutive send failures before USB reset
+USBDEVFS_RESET = 21780    # ioctl for USB device reset
+GS_USB_VID_PID = "1d50:606f"
 
 # ── Drive constants ─────────────────────────────────────────────────
 WHEEL_DIAMETER     = 11.75      # cm
@@ -67,6 +74,9 @@ class MecanumCAN:
         self._listener_thread = None
         self._fault_callback = None
         self._last_fault_time = 0.0
+        self._consecutive_send_fails = 0
+        self._reconnect_lock = threading.Lock()
+        self._last_reconnect = 0.0
 
     # ── CAN low-level ───────────────────────────────────────────────
     def send(self, node_id, cmd_id, data=b''):
@@ -79,10 +89,15 @@ class MecanumCAN:
         for attempt in range(3):
             try:
                 self.bus.send(msg)
+                self._consecutive_send_fails = 0
                 return True
             except Exception as e:
                 if attempt == 2:
+                    self._consecutive_send_fails += 1
                     print(f"CAN send error node {node_id} cmd 0x{cmd_id:02X}: {e}")
+                    if self._consecutive_send_fails >= SEND_FAIL_THRESHOLD:
+                        print(f"CAN bus-off detected ({self._consecutive_send_fails} consecutive failures)")
+                        self._auto_reconnect()
                 time.sleep(0.05)
         return False
 
@@ -120,8 +135,24 @@ class MecanumCAN:
             self._request(nid, CMD_ENCODER_EST, dlc=8)
             self._request(nid, CMD_GET_IQ, dlc=8)
 
+    def _detect_interface(self):
+        """Detect CAN interface: gs_usb (native) or slcan (serial adapter)."""
+        try:
+            result = subprocess.run(["lsusb"], capture_output=True, text=True, timeout=5)
+            if "1d50:606f" in result.stdout:
+                return "gs_usb", {"channel": 0, "bitrate": CAN_BITRATE}
+        except Exception:
+            pass
+        import glob
+        for dev in glob.glob("/dev/ttyUSB*") + glob.glob("/dev/ttyACM*"):
+            return "slcan", {"channel": dev, "bitrate": CAN_BITRATE, "ttyBaudrate": 115200}
+        raise RuntimeError("No CAN adapter found (no gs_usb or serial device)")
+
     def _open_bus(self):
-        self.bus = can.Bus(interface='gs_usb', channel=0, bitrate=CAN_BITRATE)
+        iface, kwargs = self._detect_interface()
+        self._can_iface = iface
+        print(f"Opening CAN bus ({iface})...")
+        self.bus = can.Bus(interface=iface, **kwargs)
         print("CAN bus connected!")
         self._drain_rx()
 
@@ -135,6 +166,91 @@ class MecanumCAN:
                 print(f"CAN shutdown warning: {e}")
         gc.collect()
         time.sleep(0.3)
+
+    @staticmethod
+    def _find_gs_usb_devpath():
+        """Find the /dev/bus/usb path for the gs_usb CAN adapter."""
+        try:
+            result = subprocess.run(["lsusb"], capture_output=True, text=True, timeout=5)
+            for line in result.stdout.splitlines():
+                if GS_USB_VID_PID in line:
+                    parts = line.split()
+                    bus = parts[1]
+                    dev = parts[3].rstrip(":")
+                    return f"/dev/bus/usb/{bus}/{dev}"
+        except Exception:
+            pass
+        return None
+
+    @staticmethod
+    def _reset_usb_device(dev_path):
+        """Send a USB-level reset ioctl to re-enumerate the device."""
+        try:
+            fd = os.open(dev_path, os.O_WRONLY)
+            try:
+                fcntl.ioctl(fd, USBDEVFS_RESET, 0)
+            finally:
+                os.close(fd)
+            print(f"USB reset sent to {dev_path}")
+            return True
+        except PermissionError:
+            try:
+                subprocess.run(
+                    ["sudo", "python3", "-c",
+                     f"import fcntl,os; fd=os.open('{dev_path}',os.O_WRONLY); "
+                     f"fcntl.ioctl(fd,{USBDEVFS_RESET},0); os.close(fd)"],
+                    timeout=5, check=True,
+                    capture_output=True,
+                )
+                print(f"USB reset sent to {dev_path} (via sudo)")
+                return True
+            except Exception as e:
+                print(f"USB reset failed (sudo): {e}")
+                return False
+        except Exception as e:
+            print(f"USB reset failed: {e}")
+            return False
+
+    def _cycle_can_interface(self):
+        """Reset the USB adapter and pause to let it re-enumerate."""
+        dev_path = self._find_gs_usb_devpath()
+        if dev_path:
+            self._reset_usb_device(dev_path)
+        time.sleep(2.0)
+        gc.collect()
+
+    def _auto_reconnect(self):
+        """Attempt to recover from bus-off by resetting USB and reopening."""
+        if not self._reconnect_lock.acquire(blocking=False):
+            return
+        try:
+            now = time.time()
+            if now - self._last_reconnect < 10.0:
+                return
+            self._last_reconnect = now
+            self._consecutive_send_fails = 0
+
+            print("Auto-reconnecting CAN bus...")
+            was_armed = set(self.armed)
+            self._close_bus()
+            self._cycle_can_interface()
+
+            try:
+                self._open_bus()
+                self.connected.clear()
+                self._scan_for_odrives(attempts=2)
+                if self.connected:
+                    print(f"Reconnected: {sorted(self.connected)}")
+                    self.clear_all_errors()
+                    for nid in was_armed:
+                        if nid in self.connected and nid in self.active_ids:
+                            self.arm(nid)
+                else:
+                    print("WARNING: Reconnect found no ODrives")
+            except Exception as e:
+                print(f"Reconnect failed: {e}")
+        finally:
+            self._reconnect_lock.release()
 
     def _scan_for_odrives(self, attempts=SCAN_ATTEMPTS):
         expect_count = len(self.active_ids)
@@ -202,14 +318,14 @@ class MecanumCAN:
             self._open_bus()
             self._scan_for_odrives()
             if not self.connected:
-                print("No ODrives found on first scan. Reopening CAN adapter once...")
+                print("No ODrives found on first scan. Cycling CAN interface...")
                 self._close_bus()
+                self._cycle_can_interface()
                 self._open_bus()
                 self._scan_for_odrives(attempts=3)
             print(f"Connected: {sorted(self.connected)}")
             if not self.connected:
                 print("WARNING: No ODrives found.")
-            # Clear any pre-existing errors before starting
             if self.connected:
                 print("Clearing any pre-existing ODrive errors...")
                 self.clear_all_errors()
@@ -220,8 +336,26 @@ class MecanumCAN:
             raise
         except Exception as e:
             print(f"CAN connection failed: {e}")
+            print("Cycling CAN interface and retrying...")
             self._closed = True
             self._close_bus()
+            self._cycle_can_interface()
+            try:
+                self._closed = False
+                self._open_bus()
+                self._scan_for_odrives()
+                print(f"Connected: {sorted(self.connected)}")
+                if self.connected:
+                    self.clear_all_errors()
+                    self._listener_thread = threading.Thread(
+                        target=self._listener, daemon=True)
+                    self._listener_thread.start()
+                else:
+                    print("WARNING: No ODrives found after retry.")
+            except Exception as e2:
+                print(f"CAN connection failed on retry: {e2}")
+                self._closed = True
+                self._close_bus()
 
     def shutdown(self):
         if self._closed and self.bus is None:

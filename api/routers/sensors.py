@@ -163,14 +163,14 @@ async def ws_sensors(websocket: WebSocket):
             armed = raw.get("armed", [])
             motors = {}
             for nid in ALL_IDS:
-                nid_str = str(nid)
-                motors[nid_str] = {
-                    "role": MOTORS[nid]["role"],
-                    "armed": nid in armed,
-                    "error": raw.get("errors", {}).get(nid_str, 0),
-                    "current": raw.get("currents", {}).get(nid_str, 0.0),
-                    "position": raw.get("positions", {}).get(nid_str, 0.0),
-                    "axis_state": raw.get("axis_states", {}).get(nid_str, 0),
+                role = MOTORS[nid]["role"]
+                motors[str(nid)] = {
+                    "role": role,
+                    "armed": role in armed or nid in armed,
+                    "error": raw.get("errors", {}).get(role, 0),
+                    "current": raw.get("currents", {}).get(role, 0.0),
+                    "position": raw.get("positions", {}).get(role, 0.0),
+                    "axis_state": raw.get("axis_states", {}).get(role, 0),
                 }
             msg["motors"] = {
                 "connected": connected,

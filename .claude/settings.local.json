@@ -41,7 +41,9 @@
       "Bash(read commit:*)",
       "Bash(find:*)",
       "WebFetch(domain:docs.odriverobotics.com)",
-      "mcp__ide__getDiagnostics"
+      "mcp__ide__getDiagnostics",
+      "Bash(lsusb)",
+      "Read(//dev/**)"
     ]
   }
 }

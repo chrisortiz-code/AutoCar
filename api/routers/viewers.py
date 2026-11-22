@@ -529,3 +529,360 @@ def viewer_drive():
 @router.get("/paths", response_class=HTMLResponse)
 def viewer_paths():
     return _PATHS_HTML
+
+
+# ── RL Viewport ─────────────────────────────────────────────────────
+
+_RL_HTML = """<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1"/>
+<title>RL Viewport</title>
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+body{background:#0a0a14;color:#e0e0e0;font-family:system-ui,sans-serif;padding:8px}
+h1{color:#c8a94e;font-size:1.2rem;margin-bottom:8px}
+.row{display:flex;gap:6px;margin-bottom:6px;flex-wrap:wrap}
+.col{flex:1;min-width:0}
+.feed-box{position:relative;background:#111;border:1px solid #c8a94e44;border-radius:8px;overflow:hidden}
+.feed-box img{width:100%;height:100%;object-fit:contain;display:block}
+.feed-label{position:absolute;top:4px;left:6px;font-size:11px;color:#c8a94e;font-weight:600;z-index:2;
+  text-shadow:0 0 4px #000}
+.feed-box.rgb{height:260px;cursor:crosshair}
+.feed-box.small{height:180px}
+#lidar-canvas{width:100%;height:100%;display:block}
+.controls{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:6px}
+.controls select,.controls button,.controls input{
+  background:#1a1a2e;color:#e0e0e0;border:1px solid #c8a94e66;border-radius:6px;padding:6px 10px;font-size:13px}
+.controls button{cursor:pointer}
+.controls button:hover{background:#c8a94e33}
+.controls button.stop{background:#c44;color:#fff;border-color:#c44}
+.controls button.stop:hover{background:#a33}
+.stats{display:grid;grid-template-columns:repeat(auto-fill,minmax(80px,1fr));gap:4px;margin-bottom:6px}
+.stat{background:#1a1a2e;border-radius:6px;padding:4px 6px;text-align:center}
+.stat .label{font-size:10px;color:#c8a94e}
+.stat .val{font-size:13px;font-family:monospace;font-weight:600}
+.bar-row{display:flex;align-items:center;gap:6px;margin-bottom:3px}
+.bar-label{width:40px;font-size:11px;color:#c8a94e;text-align:right}
+.bar-track{flex:1;height:12px;background:#1a1a2e;border-radius:6px;position:relative;overflow:hidden}
+.bar-fill{height:100%;border-radius:6px;transition:width .15s}
+.bar-val{width:44px;font-size:11px;font-family:monospace;text-align:left}
+.section-label{font-size:11px;color:#c8a94e;margin:4px 0 2px;font-weight:600}
+.latency-bar{height:16px;border-radius:6px;display:flex;overflow:hidden;margin-bottom:4px}
+.lat-csrt{background:#4488cc}
+.lat-policy{background:#8844cc}
+.lat-label{font-size:10px;color:#fff;padding:0 4px;line-height:16px;white-space:nowrap}
+.safety-warn{color:#c44;font-weight:700;text-align:center;font-size:13px;margin:4px 0}
+.status-chip{display:inline-block;padding:2px 8px;border-radius:10px;font-size:11px;font-weight:600}
+.status-chip.idle{background:#333;color:#888}
+.status-chip.streaming{background:#c8a94e33;color:#c8a94e}
+.status-chip.tracking{background:#5a9a5a33;color:#5a9a5a}
+.status-chip.lost{background:#c4433b33;color:#c44}
+.hint{color:#c8a94e;font-size:12px;margin:4px 0}
+</style>
+</head>
+<body>
+<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
+  <h1>RL Viewport</h1>
+  <span class="status-chip idle" id="chip">idle</span>
+</div>
+
+<div id="idle-panel">
+  <div class="controls">
+    <select id="sel-ckpt"><option value="">Default model</option></select>
+    <select id="sel-backend">
+      <option value="csrt">CSRT</option><option value="orb">ORB</option>
+      <option value="akaze">AKAZE</option><option value="sift">SIFT</option>
+      <option value="lightglue">LightGlue</option>
+    </select>
+    <label style="display:flex;align-items:center;gap:4px;font-size:12px">
+      <input type="checkbox" id="chk-safety"/> Safety
+    </label>
+    <button id="btn-start">Start</button>
+  </div>
+</div>
+
+<div id="active-panel" style="display:none">
+  <!-- RGB stream -->
+  <div class="feed-box rgb" id="rgb-box">
+    <span class="feed-label">RGB</span>
+    <img id="img-rgb" src=""/>
+    <canvas id="draw-canvas" style="position:absolute;top:0;left:0;width:100%;height:100%;z-index:1"></canvas>
+    <span class="hint" id="draw-hint" style="position:absolute;top:4px;right:6px;z-index:2"></span>
+  </div>
+
+  <!-- Depth + LiDAR -->
+  <div class="row" style="margin-top:6px">
+    <div class="col">
+      <div class="feed-box small">
+        <span class="feed-label">DEPTH</span>
+        <img id="img-depth" src=""/>
+      </div>
+    </div>
+    <div class="col">
+      <div class="feed-box small" style="background:#0a0a14">
+        <span class="feed-label">LIDAR</span>
+        <canvas id="lidar-canvas"></canvas>
+      </div>
+    </div>
+  </div>
+
+  <!-- Telemetry -->
+  <div id="telem">
+    <div class="stats" id="model-stats"></div>
+    <div id="latency-section" style="display:none">
+      <div class="section-label">Pipeline</div>
+      <div class="latency-bar" id="latency-bar"></div>
+    </div>
+    <div id="actions-section" style="display:none">
+      <div class="section-label">Actions</div>
+      <div id="action-bars"></div>
+    </div>
+    <div class="stats" id="motor-stats"></div>
+    <div class="stats" id="depth-stats"></div>
+    <div class="safety-warn" id="safety-warn" style="display:none">SAFETY ACTIVE</div>
+  </div>
+
+  <div class="controls" style="margin-top:6px">
+    <button id="btn-reset">Reset</button>
+    <button id="btn-stop" class="stop">Stop</button>
+  </div>
+</div>
+
+<script>
+const BASE = '';
+let polling = null, lidarPoll = null;
+
+// ── Init ──
+fetch(BASE+'/api/rl/checkpoints').then(r=>r.json()).then(d=>{
+  const sel = document.getElementById('sel-ckpt');
+  (d.checkpoints||[]).forEach(c=>{
+    const o = document.createElement('option');
+    o.value = c; o.textContent = c.replace('.pt','');
+    sel.appendChild(o);
+  });
+}).catch(()=>{});
+
+fetch(BASE+'/api/safety/status').then(r=>r.json()).then(d=>{
+  document.getElementById('chk-safety').checked = d.enabled;
+}).catch(()=>{});
+
+// ── Start / Stop ──
+document.getElementById('btn-start').onclick = async ()=>{
+  const ckpt = document.getElementById('sel-ckpt').value;
+  const backend = document.getElementById('sel-backend').value;
+  const safety = document.getElementById('chk-safety').checked;
+  try {
+    if (safety) await fetch(BASE+'/api/safety/enable',{method:'POST'});
+    else await fetch(BASE+'/api/safety/disable',{method:'POST'});
+  } catch(e){}
+  const body = {desired_dist:1.0, backend};
+  if (ckpt) body.checkpoint = 'rl_policy/checkpoints/'+ckpt;
+  const r = await fetch(BASE+'/api/rl/start',{method:'POST',
+    headers:{'Content-Type':'application/json'}, body:JSON.stringify(body)});
+  if (r.ok) activateUI();
+};
+
+document.getElementById('btn-stop').onclick = async ()=>{
+  await fetch(BASE+'/api/rl/stop',{method:'POST'});
+  deactivateUI();
+};
+
+document.getElementById('btn-reset').onclick = ()=>{
+  fetch(BASE+'/api/rl/reset',{method:'POST'});
+};
+
+function activateUI(){
+  document.getElementById('idle-panel').style.display='none';
+  document.getElementById('active-panel').style.display='block';
+  document.getElementById('img-rgb').src = BASE+'/api/rl/stream';
+  document.getElementById('img-depth').src = BASE+'/api/rl/depth_stream';
+  startPolling();
+  startLidarPolling();
+}
+
+function deactivateUI(){
+  stopPolling();
+  document.getElementById('idle-panel').style.display='block';
+  document.getElementById('active-panel').style.display='none';
+  document.getElementById('img-rgb').src='';
+  document.getElementById('img-depth').src='';
+}
+
+// ── Check if already running on load ──
+fetch(BASE+'/api/rl/status').then(r=>r.json()).then(d=>{
+  if (d.status && d.status!=='idle') activateUI();
+}).catch(()=>{});
+
+// ── Status polling ──
+function startPolling(){
+  if (polling) return;
+  polling = setInterval(async ()=>{
+    try {
+      const r = await fetch(BASE+'/api/rl/status');
+      const s = await r.json();
+      updateTelemetry(s);
+    } catch(e){}
+  }, 250);
+}
+function stopPolling(){
+  clearInterval(polling); polling=null;
+  clearInterval(lidarPoll); lidarPoll=null;
+}
+
+function updateTelemetry(s){
+  // Chip
+  const chip = document.getElementById('chip');
+  chip.textContent = s.status;
+  chip.className = 'status-chip '+(s.status||'idle');
+
+  // Hint
+  const hint = document.getElementById('draw-hint');
+  hint.textContent = s.status==='streaming' ? 'Draw box on target' : '';
+
+  // Model stats
+  const ms = document.getElementById('model-stats');
+  ms.innerHTML = stat('Model', s.model_name||s.model_variant||'--')
+    + stat('Actions', s.action_dim+'D')
+    + stat('LSTM', '#'+s.lstm_step)
+    + stat('FPS', (s.fps||0).toFixed(1));
+
+  // Latency
+  const ls = document.getElementById('latency-section');
+  if (s.total_ms > 0){
+    ls.style.display='block';
+    const pct_c = (s.csrt_ms/s.total_ms*100).toFixed(0);
+    const pct_p = (s.policy_ms/s.total_ms*100).toFixed(0);
+    document.getElementById('latency-bar').innerHTML =
+      '<div class="lat-csrt" style="width:'+pct_c+'%"><span class="lat-label">CSRT '+s.csrt_ms.toFixed(1)+'ms</span></div>'
+      +'<div class="lat-policy" style="width:'+pct_p+'%"><span class="lat-label">Policy '+s.policy_ms.toFixed(1)+'ms</span></div>';
+  } else ls.style.display='none';
+
+  // Actions
+  const as = document.getElementById('actions-section');
+  const ab = document.getElementById('action-bars');
+  if (s.actions && s.actions.length){
+    as.style.display='block';
+    const names = s.action_dim===2 ? ['Fwd','Yaw'] : ['Fwd','Strafe','Yaw'];
+    ab.innerHTML = s.actions.map((v,i)=>{
+      const pct = ((v+1)/2*100).toFixed(0);
+      const col = v>=0 ? '#5a9a5a' : '#c44';
+      return '<div class="bar-row"><span class="bar-label">'+names[i]+'</span>'
+        +'<div class="bar-track"><div class="bar-fill" style="width:'+pct+'%;background:'+col+'"></div></div>'
+        +'<span class="bar-val">'+v.toFixed(2)+'</span></div>';
+    }).join('');
+  } else as.style.display='none';
+
+  // Motors
+  if (s.motor_cmd && s.motor_cmd.length===4){
+    document.getElementById('motor-stats').innerHTML =
+      stat('Vx',s.motor_cmd[0].toFixed(2))+stat('Vy',s.motor_cmd[1].toFixed(2))
+      +stat('Spd',s.motor_cmd[2].toFixed(2))+stat('Rot',s.motor_cmd[3].toFixed(2));
+  }
+
+  // Depth
+  document.getElementById('depth-stats').innerHTML =
+    stat('Conf',(s.confidence*100).toFixed(0)+'%')
+    +stat('Target',s.target_depth>0?s.target_depth+'mm':'--')
+    +stat('Depth',s.cur_depth>0?s.cur_depth+'mm':'--')
+    +stat('Dist',(s.desired_dist||0).toFixed(2)+'m');
+
+  // Safety
+  const sw = document.getElementById('safety-warn');
+  sw.style.display = s.safety_active ? 'block' : 'none';
+}
+
+function stat(label,val){
+  return '<div class="stat"><div class="label">'+label+'</div><div class="val">'+val+'</div></div>';
+}
+
+// ── Bbox drawing on RGB canvas ──
+const drawCanvas = document.getElementById('draw-canvas');
+const ctx = drawCanvas.getContext('2d');
+let drawing=false, sx=0, sy=0;
+
+function canvasCoords(e){
+  const r = drawCanvas.getBoundingClientRect();
+  return [(e.clientX-r.left)/r.width, (e.clientY-r.top)/r.height];
+}
+drawCanvas.onmousedown = e=>{drawing=true; [sx,sy]=canvasCoords(e);};
+drawCanvas.onmousemove = e=>{
+  if(!drawing) return;
+  const [cx,cy]=canvasCoords(e);
+  const r=drawCanvas.getBoundingClientRect();
+  drawCanvas.width=r.width; drawCanvas.height=r.height;
+  ctx.strokeStyle='#0f0'; ctx.lineWidth=2; ctx.setLineDash([6,4]);
+  ctx.strokeRect(sx*r.width, sy*r.height, (cx-sx)*r.width, (cy-sy)*r.height);
+};
+drawCanvas.onmouseup = e=>{
+  if(!drawing) return; drawing=false;
+  const [ex,ey]=canvasCoords(e);
+  const x1=Math.min(sx,ex), y1=Math.min(sy,ey), x2=Math.max(sx,ex), y2=Math.max(sy,ey);
+  if (x2-x1>0.02 && y2-y1>0.02){
+    fetch(BASE+'/api/rl/set_ref',{method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({x1,y1,x2,y2})});
+  }
+  const r=drawCanvas.getBoundingClientRect();
+  drawCanvas.width=r.width; drawCanvas.height=r.height;
+};
+
+// ── LiDAR polar plot ──
+function startLidarPolling(){
+  if(lidarPoll) return;
+  lidarPoll = setInterval(async ()=>{
+    try{
+      const r = await fetch(BASE+'/api/sensors/lidar/scan');
+      const d = await r.json();
+      drawLidar(d.points||[]);
+    }catch(e){}
+  }, 250);
+}
+
+function drawLidar(points){
+  const c = document.getElementById('lidar-canvas');
+  const box = c.parentElement.getBoundingClientRect();
+  c.width = box.width; c.height = box.height;
+  const ctx2 = c.getContext('2d');
+  const cx = c.width/2, cy = c.height/2;
+  const maxR = Math.min(cx,cy)-10;
+
+  // Find max distance for scaling
+  let maxDist = 3000;
+  points.forEach(p=>{ if(p.dist_mm>maxDist) maxDist=p.dist_mm; });
+
+  // Background
+  ctx2.fillStyle='#0a0a14'; ctx2.fillRect(0,0,c.width,c.height);
+
+  // Range rings
+  ctx2.strokeStyle='#333'; ctx2.lineWidth=0.5;
+  for(let i=1;i<=4;i++){
+    ctx2.beginPath(); ctx2.arc(cx,cy,maxR*i/4,0,Math.PI*2); ctx2.stroke();
+  }
+
+  // Points
+  points.forEach(p=>{
+    if(p.dist_mm<=0) return;
+    const r = (p.dist_mm/maxDist)*maxR;
+    const a = (p.angle-90)*Math.PI/180;
+    const px = cx + r*Math.cos(a);
+    const py = cy + r*Math.sin(a);
+    const ratio = p.dist_mm/maxDist;
+    const red = Math.min(255, Math.floor(255*ratio));
+    const green = Math.min(255, Math.floor(255*(1-ratio)));
+    ctx2.fillStyle = 'rgb('+red+','+green+',80)';
+    ctx2.fillRect(px-1,py-1,2,2);
+  });
+
+  // Center dot
+  ctx2.fillStyle='#c8a94e'; ctx2.beginPath(); ctx2.arc(cx,cy,3,0,Math.PI*2); ctx2.fill();
+}
+</script>
+</body>
+</html>"""
+
+
+@router.get("/rl", response_class=HTMLResponse)
+def viewer_rl():
+    return _RL_HTML

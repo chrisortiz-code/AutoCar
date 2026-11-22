@@ -66,6 +66,7 @@ fun RlViewport(
     val checkpoints by rlVm.checkpoints.collectAsState()
     val safetyStatus by rlVm.safetyStatus.collectAsState()
     val lidarPoints by rlVm.lidarPoints.collectAsState()
+    val driveStatus by rlVm.driveStatus.collectAsState()
     var selectedCheckpoint by remember { mutableStateOf("") }
     var selectedBackend by remember { mutableStateOf("csrt") }
 
@@ -255,6 +256,28 @@ fun RlViewport(
                     StatCell("Dist", "%.2fm".format(rlState.desiredDist))
                 }
 
+                // Motor hardware status
+                Text("Motors", style = MaterialTheme.typography.labelSmall, color = Gold)
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceEvenly,
+                ) {
+                    val rcvColor = if (driveStatus.receiver_online) StatusGreen else StatusRed
+                    StatCell("Receiver", if (driveStatus.receiver_online) "Online" else "Offline", rcvColor)
+                    val roles = listOf("BL" to 0, "FL" to 1, "BR" to 2, "FR" to 3)
+                    roles.forEach { (role, nid) ->
+                        val conn = nid in driveStatus.connected
+                        val armed = nid in driveStatus.armed
+                        val motor = driveStatus.motors[nid.toString()]
+                        val (color, label) = when {
+                            conn && armed -> StatusGreen to "%.1fA".format(motor?.current ?: 0f)
+                            conn -> StatusYellow to "Idle"
+                            else -> StatusRed to "N/C"
+                        }
+                        StatCell(motor?.role ?: role, label, color)
+                    }
+                }
+
                 if (rlState.safetyActive) {
                     Text(
                         "SAFETY ACTIVE",
@@ -398,13 +421,13 @@ private fun RlStatusChip(status: String) {
 }
 
 @Composable
-private fun StatCell(label: String, value: String) {
+private fun StatCell(label: String, value: String, valueColor: Color? = null) {
     Column(horizontalAlignment = Alignment.CenterHorizontally) {
         Text(
             value,
             style = MaterialTheme.typography.titleSmall,
             fontFamily = FontFamily.Monospace,
-            color = MaterialTheme.colorScheme.onSurface,
+            color = valueColor ?: MaterialTheme.colorScheme.onSurface,
         )
         Text(label, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
     }

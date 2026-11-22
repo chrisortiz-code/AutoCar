@@ -639,8 +639,12 @@ h1{color:#c8a94e;font-size:1.2rem;margin-bottom:8px}
       <div class="section-label">Actions</div>
       <div id="action-bars"></div>
     </div>
-    <div class="stats" id="motor-stats"></div>
+    <div class="stats" id="motor-cmd-stats"></div>
     <div class="stats" id="depth-stats"></div>
+    <div id="motor-hw-section">
+      <div class="section-label">Motors</div>
+      <div class="stats" id="motor-hw-stats"></div>
+    </div>
     <div class="safety-warn" id="safety-warn" style="display:none">SAFETY ACTIVE</div>
   </div>
 
@@ -652,7 +656,7 @@ h1{color:#c8a94e;font-size:1.2rem;margin-bottom:8px}
 
 <script>
 const BASE = '';
-let polling = null, lidarPoll = null;
+let polling = null, lidarPoll = null, motorPoll = null;
 
 // ── Init ──
 fetch(BASE+'/api/rl/checkpoints').then(r=>r.json()).then(d=>{
@@ -700,6 +704,7 @@ function activateUI(){
   document.getElementById('img-depth').src = BASE+'/api/rl/depth_stream';
   startPolling();
   startLidarPolling();
+  startMotorPolling();
 }
 
 function deactivateUI(){
@@ -726,9 +731,22 @@ function startPolling(){
     } catch(e){}
   }, 250);
 }
+
+function startMotorPolling(){
+  if (motorPoll) return;
+  motorPoll = setInterval(async ()=>{
+    try {
+      const r = await fetch(BASE+'/api/drive/status');
+      const d = await r.json();
+      updateMotorHw(d);
+    } catch(e){}
+  }, 1000);
+}
+
 function stopPolling(){
   clearInterval(polling); polling=null;
   clearInterval(lidarPoll); lidarPoll=null;
+  clearInterval(motorPoll); motorPoll=null;
 }
 
 function updateTelemetry(s){
@@ -774,9 +792,9 @@ function updateTelemetry(s){
     }).join('');
   } else as.style.display='none';
 
-  // Motors
+  // Motor commands
   if (s.motor_cmd && s.motor_cmd.length===4){
-    document.getElementById('motor-stats').innerHTML =
+    document.getElementById('motor-cmd-stats').innerHTML =
       stat('Vx',s.motor_cmd[0].toFixed(2))+stat('Vy',s.motor_cmd[1].toFixed(2))
       +stat('Spd',s.motor_cmd[2].toFixed(2))+stat('Rot',s.motor_cmd[3].toFixed(2));
   }
@@ -793,39 +811,119 @@ function updateTelemetry(s){
   sw.style.display = s.safety_active ? 'block' : 'none';
 }
 
+function updateMotorHw(d){
+  const el = document.getElementById('motor-hw-stats');
+  const roles = {0:'BL',1:'FL',2:'BR',3:'FR'};
+  let html = '';
+  const rcvColor = d.receiver_online ? '#5a9a5a' : '#c44';
+  html += '<div class="stat"><div class="label">Receiver</div><div class="val" style="color:'+rcvColor+'">'
+    +(d.receiver_online?'Online':'Offline')+'</div></div>';
+  for (let nid=0; nid<4; nid++){
+    const m = d.motors && d.motors[String(nid)];
+    const conn = (d.connected||[]).includes(nid);
+    const armed = m && m.armed;
+    let color = '#c44', label = 'N/C';
+    if (conn && armed){ color='#5a9a5a'; label=m.current.toFixed(1)+'A'; }
+    else if (conn){ color='#c87830'; label='Idle'; }
+    html += '<div class="stat"><div class="label">'+(m?m.role:roles[nid])+'</div>'
+      +'<div class="val" style="color:'+color+'">'+label+'</div></div>';
+  }
+  el.innerHTML = html;
+}
+
 function stat(label,val){
   return '<div class="stat"><div class="label">'+label+'</div><div class="val">'+val+'</div></div>';
 }
 
 // ── Bbox drawing on RGB canvas ──
+// The image uses object-fit:contain, so we must map canvas coords
+// to the actual image content rect (excluding letterbox bars).
 const drawCanvas = document.getElementById('draw-canvas');
-const ctx = drawCanvas.getContext('2d');
+const drawCtx = drawCanvas.getContext('2d');
+const rgbImg = document.getElementById('img-rgb');
 let drawing=false, sx=0, sy=0;
 
-function canvasCoords(e){
-  const r = drawCanvas.getBoundingClientRect();
-  return [(e.clientX-r.left)/r.width, (e.clientY-r.top)/r.height];
+function imageRect(){
+  // Compute the rendered image rect within the container
+  // accounting for object-fit: contain letterboxing
+  const box = rgbImg.getBoundingClientRect();
+  const natW = rgbImg.naturalWidth || 640;
+  const natH = rgbImg.naturalHeight || 480;
+  const scale = Math.min(box.width/natW, box.height/natH);
+  const imgW = natW*scale, imgH = natH*scale;
+  const offX = (box.width-imgW)/2, offY = (box.height-imgH)/2;
+  return {left: box.left+offX, top: box.top+offY, width: imgW, height: imgH};
 }
-drawCanvas.onmousedown = e=>{drawing=true; [sx,sy]=canvasCoords(e);};
+
+function imgCoords(e){
+  const r = imageRect();
+  const x = Math.max(0, Math.min(1, (e.clientX-r.left)/r.width));
+  const y = Math.max(0, Math.min(1, (e.clientY-r.top)/r.height));
+  return [x, y];
+}
+
+drawCanvas.onmousedown = e=>{ drawing=true; [sx,sy]=imgCoords(e); };
 drawCanvas.onmousemove = e=>{
   if(!drawing) return;
-  const [cx,cy]=canvasCoords(e);
-  const r=drawCanvas.getBoundingClientRect();
-  drawCanvas.width=r.width; drawCanvas.height=r.height;
-  ctx.strokeStyle='#0f0'; ctx.lineWidth=2; ctx.setLineDash([6,4]);
-  ctx.strokeRect(sx*r.width, sy*r.height, (cx-sx)*r.width, (cy-sy)*r.height);
+  const [cx,cy] = imgCoords(e);
+  const cRect = drawCanvas.getBoundingClientRect();
+  drawCanvas.width = cRect.width; drawCanvas.height = cRect.height;
+  // Draw the selection rect mapped back to canvas pixels
+  const ir = imageRect();
+  const offX = ir.left - cRect.left, offY = ir.top - cRect.top;
+  drawCtx.strokeStyle='#0f0'; drawCtx.lineWidth=2; drawCtx.setLineDash([6,4]);
+  drawCtx.strokeRect(
+    offX + sx*ir.width, offY + sy*ir.height,
+    (cx-sx)*ir.width, (cy-sy)*ir.height
+  );
 };
 drawCanvas.onmouseup = e=>{
   if(!drawing) return; drawing=false;
-  const [ex,ey]=canvasCoords(e);
+  const [ex,ey] = imgCoords(e);
   const x1=Math.min(sx,ex), y1=Math.min(sy,ey), x2=Math.max(sx,ex), y2=Math.max(sy,ey);
   if (x2-x1>0.02 && y2-y1>0.02){
     fetch(BASE+'/api/rl/set_ref',{method:'POST',
       headers:{'Content-Type':'application/json'},
       body:JSON.stringify({x1,y1,x2,y2})});
   }
-  const r=drawCanvas.getBoundingClientRect();
-  drawCanvas.width=r.width; drawCanvas.height=r.height;
+  const cRect = drawCanvas.getBoundingClientRect();
+  drawCanvas.width = cRect.width; drawCanvas.height = cRect.height;
+};
+
+// Touch support for mobile browsers
+drawCanvas.ontouchstart = e=>{
+  e.preventDefault();
+  const t = e.touches[0];
+  drawing=true; [sx,sy]=imgCoords(t);
+};
+drawCanvas.ontouchmove = e=>{
+  e.preventDefault();
+  if(!drawing) return;
+  const t = e.touches[0];
+  const [cx,cy] = imgCoords(t);
+  const cRect = drawCanvas.getBoundingClientRect();
+  drawCanvas.width = cRect.width; drawCanvas.height = cRect.height;
+  const ir = imageRect();
+  const offX = ir.left - cRect.left, offY = ir.top - cRect.top;
+  drawCtx.strokeStyle='#0f0'; drawCtx.lineWidth=2; drawCtx.setLineDash([6,4]);
+  drawCtx.strokeRect(
+    offX + sx*ir.width, offY + sy*ir.height,
+    (cx-sx)*ir.width, (cy-sy)*ir.height
+  );
+};
+drawCanvas.ontouchend = e=>{
+  e.preventDefault();
+  if(!drawing) return; drawing=false;
+  const t = e.changedTouches[0];
+  const [ex,ey] = imgCoords(t);
+  const x1=Math.min(sx,ex), y1=Math.min(sy,ey), x2=Math.max(sx,ex), y2=Math.max(sy,ey);
+  if (x2-x1>0.02 && y2-y1>0.02){
+    fetch(BASE+'/api/rl/set_ref',{method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({x1,y1,x2,y2})});
+  }
+  const cRect = drawCanvas.getBoundingClientRect();
+  drawCanvas.width = cRect.width; drawCanvas.height = cRect.height;
 };
 
 // ── LiDAR polar plot ──

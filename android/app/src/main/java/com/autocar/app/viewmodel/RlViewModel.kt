@@ -4,7 +4,9 @@ import android.app.Application
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.autocar.app.data.api.ApiClient
+import com.autocar.app.data.api.DriveApi
 import com.autocar.app.data.api.RlApi
+import com.autocar.app.data.model.DriveStatus
 import com.autocar.app.data.model.LidarScanPoint
 import com.autocar.app.data.model.RlSetRefBody
 import com.autocar.app.data.model.RlStartBody
@@ -44,8 +46,12 @@ class RlViewModel(app: Application) : AndroidViewModel(app) {
     private val _lidarPoints = MutableStateFlow<List<LidarScanPoint>>(emptyList())
     val lidarPoints: StateFlow<List<LidarScanPoint>> = _lidarPoints.asStateFlow()
 
+    private val _driveStatus = MutableStateFlow(DriveStatus())
+    val driveStatus: StateFlow<DriveStatus> = _driveStatus.asStateFlow()
+
     private var pollingJob: Job? = null
     private var lidarJob: Job? = null
+    private var motorJob: Job? = null
 
     init {
         fetchCheckpoints()
@@ -62,6 +68,12 @@ class RlViewModel(app: Application) : AndroidViewModel(app) {
         val baseUrl = store.baseUrl.first()
         val token = store.token.first()
         return ApiClient.get(baseUrl, token).create(RlApi::class.java)
+    }
+
+    private suspend fun driveApi(): DriveApi {
+        val baseUrl = store.baseUrl.first()
+        val token = store.token.first()
+        return ApiClient.get(baseUrl, token).create(DriveApi::class.java)
     }
 
     private fun refreshStatus() {
@@ -102,11 +114,25 @@ class RlViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
+    private fun startMotorPolling() {
+        motorJob?.cancel()
+        motorJob = viewModelScope.launch {
+            while (true) {
+                try {
+                    _driveStatus.value = driveApi().status()
+                } catch (_: Exception) {}
+                delay(1000)
+            }
+        }
+    }
+
     private fun stopPolling() {
         pollingJob?.cancel()
         pollingJob = null
         lidarJob?.cancel()
         lidarJob = null
+        motorJob?.cancel()
+        motorJob = null
     }
 
     fun start(desiredDist: Float = 1.0f, checkpoint: String = "", backend: String = "csrt") = viewModelScope.launch {
@@ -121,6 +147,7 @@ class RlViewModel(app: Application) : AndroidViewModel(app) {
             _error.value = null
             startPolling()
             startLidarPolling()
+            startMotorPolling()
         } catch (e: Exception) {
             _error.value = e.message
         }

@@ -13,7 +13,7 @@ from api.auth import require_auth
 from api.udp import (
     ALL_IDS, TURNS_PER_DEG, MOTOR_REVS_PER_CM_COMP,
     mecanum_speeds, send_drive, send_wheels, send_stop,
-    run_move, run_translate_rotate, UDP_HOST, UDP_PORT, RELAY_PORT,
+    run_move, run_translate_rotate, UDP_HOST, UDP_PORT,
 )
 
 import sys, os
@@ -291,13 +291,16 @@ def start_udp_relay():
     threading.Thread(target=_udp_relay, daemon=True).start()
 
 
+PATH_RELAY_PORT = int(os.getenv("PATH_RELAY_PORT", "5557"))
+
+
 def _udp_relay():
     relay_sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-    relay_sock.bind(("0.0.0.0", RELAY_PORT))
+    relay_sock.bind(("0.0.0.0", PATH_RELAY_PORT))
     relay_sock.settimeout(1.0)
     udp_sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     udp_dest = (UDP_HOST, UDP_PORT)
-    print(f"UDP relay listening on :{RELAY_PORT} -> forwarding to {UDP_HOST}:{UDP_PORT}")
+    print(f"UDP relay listening on :{PATH_RELAY_PORT} -> forwarding to {UDP_HOST}:{UDP_PORT}")
 
     while True:
         try:

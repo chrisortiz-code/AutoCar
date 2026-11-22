@@ -307,9 +307,11 @@ def _rl_tracker_loop(desired_dist_m, checkpoint_path, backend="csrt"):
 
                         # Get lidar scan
                         scan_points = []
+                        lidar_ok = False
                         if _lidar_reader is not None:
                             scan_data = _lidar_reader.get_scan()
                             scan_points = scan_data.get("points", [])
+                            lidar_ok = len(scan_points) > 0
 
                         # Provide depth (zeros if no RealSense)
                         if depth_frame is None:
@@ -321,6 +323,12 @@ def _rl_tracker_loop(desired_dist_m, checkpoint_path, backend="csrt"):
                             frame, depth_frame, bbox, scan_points, desired_dist_m,
                         )
                         policy_ms = (time.perf_counter() - t_pre) * 1000.0
+
+                        # Block motor output if lidar-equipped model has no lidar data
+                        if runner.has_lidar and not lidar_ok:
+                            raw_actions = [0.0] * len(raw_actions)
+                            with _lock:
+                                _state["safety_active"] = True
 
                         # Scale actions to motor commands
                         vx, vy, trans_speed, rot_speed = _scale_actions(raw_actions)

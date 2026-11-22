@@ -374,7 +374,8 @@ function updateMotors(m) {
   for (let nid = 0; nid < 4; nid++) {
     const el = document.getElementById('m-' + nid);
     const motor = m.motors[String(nid)];
-    const isConn = m.connected.includes(nid);
+    const role = (m.motors[String(nid)] || {}).role || ['BL','FL','BR','FR'][nid];
+    const isConn = m.connected.includes(nid) || m.connected.includes(role);
     const dot = el.querySelector('.motor-dot');
     const curr = el.querySelector('.motor-current');
     let errEl = el.querySelector('.motor-err');
@@ -644,6 +645,8 @@ h1{color:#c8a94e;font-size:1.2rem;margin-bottom:8px}
     <div id="motor-hw-section">
       <div class="section-label">Motors</div>
       <div class="stats" id="motor-hw-stats"></div>
+      <div class="section-label">Wheel Commands</div>
+      <div id="motor-wheel-cmds"></div>
     </div>
     <div class="safety-warn" id="safety-warn" style="display:none">SAFETY ACTIVE</div>
   </div>
@@ -657,6 +660,7 @@ h1{color:#c8a94e;font-size:1.2rem;margin-bottom:8px}
 <script>
 const BASE = '';
 let polling = null, lidarPoll = null, motorPoll = null;
+let lastMotorCmd = null;
 
 // ── Init ──
 fetch(BASE+'/api/rl/checkpoints').then(r=>r.json()).then(d=>{
@@ -794,6 +798,7 @@ function updateTelemetry(s){
 
   // Motor commands
   if (s.motor_cmd && s.motor_cmd.length===4){
+    lastMotorCmd = s.motor_cmd;
     document.getElementById('motor-cmd-stats').innerHTML =
       stat('Vx',s.motor_cmd[0].toFixed(2))+stat('Vy',s.motor_cmd[1].toFixed(2))
       +stat('Spd',s.motor_cmd[2].toFixed(2))+stat('Rot',s.motor_cmd[3].toFixed(2));
@@ -814,21 +819,55 @@ function updateTelemetry(s){
 function updateMotorHw(d){
   const el = document.getElementById('motor-hw-stats');
   const roles = {0:'BL',1:'FL',2:'BR',3:'FR'};
-  let html = '';
   const rcvColor = d.receiver_online ? '#5a9a5a' : '#c44';
-  html += '<div class="stat"><div class="label">Receiver</div><div class="val" style="color:'+rcvColor+'">'
+  let html = '<div class="stat" style="grid-column:1/-1"><div class="label">Receiver</div><div class="val" style="color:'+rcvColor+'">'
     +(d.receiver_online?'Online':'Offline')+'</div></div>';
   for (let nid=0; nid<4; nid++){
     const m = d.motors && d.motors[String(nid)];
-    const conn = (d.connected||[]).includes(nid);
+    const role = m ? m.role : roles[nid];
+    const conn = (d.connected||[]).includes(nid) || (d.connected||[]).includes(role);
     const armed = m && m.armed;
-    let color = '#c44', label = 'N/C';
-    if (conn && armed){ color='#5a9a5a'; label=m.current.toFixed(1)+'A'; }
-    else if (conn){ color='#c87830'; label='Idle'; }
-    html += '<div class="stat"><div class="label">'+(m?m.role:roles[nid])+'</div>'
-      +'<div class="val" style="color:'+color+'">'+label+'</div></div>';
+    const pos = m ? m.position : 0;
+    const cur = m ? m.current : 0;
+    const axState = m ? m.axis_state : 0;
+    const err = m ? m.error : 0;
+    let stateColor='#c44', stateLabel='N/C';
+    if (err) { stateColor='#c44'; stateLabel='ERR 0x'+err.toString(16); }
+    else if (conn && armed){ stateColor='#5a9a5a'; stateLabel='Armed'; }
+    else if (conn){ stateColor='#c87830'; stateLabel='Idle'; }
+    const vel = m ? (m.vel_setpoint||0) : 0;
+    const curColor = Math.abs(cur)>0.5 ? (armed?'#5a9a5a':'#c87830') : '#888';
+    const velColor = Math.abs(vel)>0.01 ? '#5a9a5a' : '#666';
+    html += '<div class="stat" style="min-width:120px"><div class="label">'+role+'</div>'
+      +'<div class="val" style="color:'+stateColor+';font-size:11px">'+stateLabel+'</div>'
+      +'<div style="font-size:11px;font-family:monospace;color:'+velColor+'">'+vel.toFixed(2)+' t/s</div>'
+      +'<div style="font-size:11px;font-family:monospace;color:'+curColor+'">'+cur.toFixed(2)+'A</div>'
+      +'</div>';
   }
   el.innerHTML = html;
+
+  // Per-wheel commanded velocities from motor_cmd D-packet
+  const cmdEl = document.getElementById('motor-wheel-cmds');
+  if (!cmdEl) return;
+  const mc = lastMotorCmd;
+  if (!mc || mc.length!==4){ cmdEl.innerHTML=''; return; }
+  const vx=mc[0], vy=mc[1], spd=mc[2], rot=mc[3];
+  // Mecanum mixing: same formula as receiver
+  const raw = {FL:vx-vy-rot, FR:vx+vy+rot, BL:vx+vy-rot, BR:vx-vy+rot};
+  const maxR = Math.max(...Object.values(raw).map(Math.abs), 0.001);
+  const wheelRoles = ['FL','FR','BL','BR'];
+  const dirs = {FL:-1, FR:1, BL:-1, BR:1};
+  let whtml = '';
+  wheelRoles.forEach(r=>{
+    const cmdVel = (raw[r]/maxR)*spd*dirs[r];
+    const absV = Math.abs(cmdVel);
+    const pct = Math.min(absV/5*100, 100).toFixed(0);
+    const col = absV<0.01?'#444': cmdVel>0?'#5a9a5a':'#c44';
+    whtml += '<div class="bar-row"><span class="bar-label">'+r+'</span>'
+      +'<div class="bar-track"><div class="bar-fill" style="width:'+pct+'%;background:'+col+'"></div></div>'
+      +'<span class="bar-val">'+(cmdVel>=0?'+':'')+cmdVel.toFixed(2)+'</span></div>';
+  });
+  cmdEl.innerHTML = whtml;
 }
 
 function stat(label,val){

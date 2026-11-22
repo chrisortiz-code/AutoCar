@@ -20,6 +20,7 @@ import odrive
 from odrive.enums import (
     AXIS_STATE_IDLE,
     AXIS_STATE_CLOSED_LOOP_CONTROL,
+    AXIS_STATE_FULL_CALIBRATION_SEQUENCE,
     CONTROL_MODE_VELOCITY_CONTROL,
     INPUT_MODE_PASSTHROUGH,
     INPUT_MODE_VEL_RAMP,
@@ -76,7 +77,7 @@ def save_config(mapping):
 
 class MecanumUSB:
     def __init__(self, max_vel=MAX_VEL, current_limit=CURRENT_LIMIT,
-                 diff_drive=False):
+                 diff_drive=False, can_interface=None):
         self.odrives = {}        # role -> odrive object
         self.serials = {}        # role -> serial number string
         self.connected = set()   # set of roles
@@ -88,9 +89,11 @@ class MecanumUSB:
         self.errors = {r: 0 for r in ALL_ROLES}
         self.axis_states = {r: 0 for r in ALL_ROLES}
         self.vbus_voltage = {r: 0.0 for r in ALL_ROLES}
+        self.vel_setpoints = {r: 0.0 for r in ALL_ROLES}
         self.max_vel = max_vel
         self.current_limit = current_limit
         self._closed = True
+        self._can_interface = can_interface
         self._poll_thread = None
         self._fault_callback = None
         self._last_fault_time = 0.0
@@ -132,6 +135,7 @@ class MecanumUSB:
                     self.errors[role] = err
                     self.axis_states[role] = ax.current_state
                     self.vbus_voltage[role] = round(odrv.vbus_voltage, 2)
+                    self.vel_setpoints[role] = round(ax.controller.input_vel, 3)
 
                     if err != 0 and prev_error == 0 and self._fault_callback:
                         now = time.time()
@@ -164,9 +168,15 @@ class MecanumUSB:
         count = len(needed)
         sn_to_role = {sn: role for role, sn in needed.items()}
 
-        print(f"Discovering {count} ODrives over USB...")
+        transport = "CAN" if self._can_interface else "USB"
+        print(f"Discovering {count} ODrives over {transport}...")
+
+        find_kwargs = dict(count=count, timeout=SCAN_TIMEOUT)
+        if self._can_interface:
+            find_kwargs["interfaces"] = [f"can:{self._can_interface}"]
+
         try:
-            devices = odrive.find_sync(count=count, timeout=SCAN_TIMEOUT)
+            devices = odrive.find_sync(**find_kwargs)
         except TimeoutError:
             print("  Timed out before finding all ODrives.")
             devices = []
@@ -288,7 +298,24 @@ class MecanumUSB:
 
         state = ax.current_state
         errors = ax.active_errors
-        if state != 8:  # CLOSED_LOOP_CONTROL = 8
+        if state != 8 and errors == 0:
+            print(f"  {role}: closed-loop failed (state={state}), running calibration...")
+            ax.requested_state = AXIS_STATE_FULL_CALIBRATION_SEQUENCE
+            for _ in range(150):
+                time.sleep(0.1)
+                if ax.current_state == AXIS_STATE_IDLE:
+                    break
+            errors = ax.active_errors
+            if errors:
+                print(f"  {role}: calibration error 0x{errors:X}, clearing...")
+                odrv.clear_errors()
+                time.sleep(0.2)
+            ax.requested_state = AXIS_STATE_CLOSED_LOOP_CONTROL
+            time.sleep(0.3)
+            state = ax.current_state
+            errors = ax.active_errors
+
+        if state != 8:
             print(f"  WARNING: {role} failed to arm! state={state}, errors=0x{errors:X}")
         else:
             self.armed.add(role)

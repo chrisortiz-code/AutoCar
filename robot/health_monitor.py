@@ -137,10 +137,13 @@ class HealthMonitor:
             self._speed_scale = 1.0
 
     def _check_battery(self):
-        if not self._mc or not self._mc.odrives:
+        if not self._mc:
+            return
+        odrives = getattr(self._mc, 'odrives', None)
+        if not odrives:
             return
         voltages = {}
-        for role, odrv in list(self._mc.odrives.items()):
+        for role, odrv in list(odrives.items()):
             try:
                 voltages[role] = round(odrv.vbus_voltage, 2)
             except Exception:

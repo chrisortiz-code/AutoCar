@@ -83,8 +83,8 @@ STRAFE_SCALE = 1.0
 YAW_SCALE = 1.0
 
 # Motor limits in turns/s (ODrive velocity units)
-MAX_ROT_SPEED = 5.0
-MAX_RANGE_SPEED = 8.0
+MAX_ROT_SPEED = 10.0
+MAX_RANGE_SPEED = 10.0
 
 # Target loss timeouts
 COAST_TIMEOUT = 0.5     # seconds: coast on last command

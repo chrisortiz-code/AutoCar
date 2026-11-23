@@ -57,8 +57,8 @@ TRACK_M = 0.3               # distance between front and back wheels
 FORWARD_SCALE = 1.0
 STRAFE_SCALE = 1.0
 YAW_SCALE = 1.0
-MAX_RANGE_SPEED = 8.0       # turns/s
-MAX_ROT_SPEED = 5.0         # turns/s
+MAX_RANGE_SPEED = 10.0      # turns/s — full ODrive range
+MAX_ROT_SPEED = 10.0        # turns/s — full ODrive range
 
 
 def _clamp(v, lo, hi):
@@ -181,14 +181,13 @@ def generate_synthetic_depth(robot: SimRobot, target: SimTarget,
         target_size_px = int((target_size_m / dist) * (img_w / 2) / math.tan(math.radians(fov_h / 2)))
         target_size_px = max(5, min(target_size_px, img_w))
 
-        # Draw target blob at correct depth
+        # Draw target as circular blob at correct depth
         depth_mm = int(dist * 1000)
         cx_i, cy_i = int(cx_img), int(cy_img)
         r = target_size_px // 2
-        y_coords, x_coords = np.ogrid[max(0, cy_i - r):min(img_h, cy_i + r),
-                                       max(0, cx_i - r):min(img_w, cx_i + r)]
-        depth[max(0, cy_i - r):min(img_h, cy_i + r),
-              max(0, cx_i - r):min(img_w, cx_i + r)] = depth_mm
+        yy, xx = np.ogrid[0:img_h, 0:img_w]
+        mask = ((xx - cx_i) ** 2 + (yy - cy_i) ** 2) <= r * r
+        depth[mask] = depth_mm
 
     return depth
 
@@ -630,6 +629,11 @@ def main():
         # Apply motor command to sim
         if not paused:
             robot.apply_motor_command(*motor_cmd, dt)
+
+        # Regenerate sensor feeds every frame so they track robot movement
+        last_depth = generate_synthetic_depth(robot, target)
+        if runner.has_lidar:
+            last_scan = generate_lidar_scan(robot, target)
 
         draw_scene(screen, robot, target, raw_actions, motor_cmd,
                    desired_dist, info_lines,

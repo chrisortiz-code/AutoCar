@@ -43,7 +43,8 @@ UDP_PORT = int(os.getenv("UDP_PORT", "5555"))
 # ── Sim constants ────────────────────────────────────────────────────
 SIM_HZ = 30
 POLICY_HZ = 4
-WINDOW_W, WINDOW_H = 900, 700
+WINDOW_W, WINDOW_H = 1200, 700
+SCENE_W = 500      # width of the 2D scene panel
 WORLD_SCALE = 100  # pixels per meter
 
 # Motor/robot constants (match real robot)
@@ -273,14 +274,14 @@ def generate_lidar_scan(robot: SimRobot, target: SimTarget, num_points=100):
 
 
 def draw_scene(screen, robot: SimRobot, target: SimTarget,
-               raw_actions, motor_cmd, desired_dist, info_lines):
+               raw_actions, motor_cmd, desired_dist, info_lines,
+               depth_frame=None, lidar_scan=None):
     """Draw 2D top-down scene with pygame."""
     import pygame
 
     screen.fill((30, 30, 30))
 
-    # World origin at center of left half
-    ox = WINDOW_W // 4
+    ox = SCENE_W // 2
     oy = WINDOW_H // 2
 
     def world_to_screen(wx, wy):
@@ -292,7 +293,7 @@ def draw_scene(screen, robot: SimRobot, target: SimTarget,
         pygame.draw.line(screen, (50, 50, 50), (sx, 0), (sx, WINDOW_H))
     for gy in range(-4, 5):
         _, sy = world_to_screen(0, gy)
-        pygame.draw.line(screen, (50, 50, 50), (0, sy), (WINDOW_W // 2, sy))
+        pygame.draw.line(screen, (50, 50, 50), (0, sy), (SCENE_W, sy))
 
     # Distance rings from robot
     rpos = world_to_screen(robot.x, robot.y)
@@ -345,8 +346,8 @@ def draw_scene(screen, robot: SimRobot, target: SimTarget,
                int(rpos[1] - vy_world * vel_scale))
     pygame.draw.line(screen, (255, 100, 0), rpos, vel_end, 3)
 
-    # ── Right panel: info ──
-    panel_x = WINDOW_W // 2 + 20
+    # ── Center panel: info ──
+    panel_x = SCENE_W + 20
     font = pygame.font.SysFont("consolas", 16)
     font_big = pygame.font.SysFont("consolas", 20, bold=True)
 
@@ -404,9 +405,79 @@ def draw_scene(screen, robot: SimRobot, target: SimTarget,
     for line in info_lines:
         text(line, (150, 150, 150))
 
-    # Divider
+    # Divider between scene and info
     pygame.draw.line(screen, (80, 80, 80),
-                     (WINDOW_W // 2, 0), (WINDOW_W // 2, WINDOW_H), 1)
+                     (SCENE_W, 0), (SCENE_W, WINDOW_H), 1)
+
+    # ── Right panel: sensor feeds ──
+    FEED_X = 860
+    pygame.draw.line(screen, (80, 80, 80),
+                     (FEED_X - 10, 0), (FEED_X - 10, WINDOW_H), 1)
+
+    feed_font = pygame.font.SysFont("consolas", 14)
+
+    # Depth frame (colorized)
+    if depth_frame is not None:
+        label = feed_font.render("DEPTH FEED", True, (0, 200, 255))
+        screen.blit(label, (FEED_X, 10))
+        depth_clipped = np.clip(depth_frame, 0, MAX_DEPTH_MM).astype(np.float32)
+        depth_norm = (depth_clipped / MAX_DEPTH_MM * 255).astype(np.uint8)
+        depth_color = cv2.applyColorMap(depth_norm, cv2.COLORMAP_TURBO)
+        depth_color = cv2.cvtColor(depth_color, cv2.COLOR_BGR2RGB)
+        dh, dw = depth_color.shape[:2]
+        display_w = WINDOW_W - FEED_X - 10
+        scale = display_w / dw
+        display_h = int(dh * scale)
+        depth_resized = cv2.resize(depth_color, (display_w, display_h))
+        surf = pygame.surfarray.make_surface(depth_resized.swapaxes(0, 1))
+        screen.blit(surf, (FEED_X, 30))
+        dist_text = math.sqrt((target.x - robot.x) ** 2 + (target.y - robot.y) ** 2)
+        depth_info = feed_font.render(f"{dist_text:.2f}m", True, (200, 200, 200))
+        screen.blit(depth_info, (FEED_X, 32 + display_h))
+        feed_y_after_depth = 50 + display_h
+    else:
+        feed_y_after_depth = 30
+
+    # Lidar polar plot
+    if lidar_scan is not None and len(lidar_scan) > 0:
+        lidar_y = feed_y_after_depth + 20
+        label = feed_font.render("LIDAR FEED", True, (0, 255, 100))
+        screen.blit(label, (FEED_X, lidar_y))
+        lidar_y += 20
+
+        plot_size = min(WINDOW_W - FEED_X - 10, WINDOW_H - lidar_y - 10)
+        plot_cx = FEED_X + plot_size // 2
+        plot_cy = lidar_y + plot_size // 2
+        max_range_mm = 5000.0
+        plot_r = plot_size // 2 - 5
+
+        # Range rings
+        for ring_m in [1.0, 2.0, 3.0, 4.0]:
+            rr = int(ring_m * 1000 / max_range_mm * plot_r)
+            pygame.draw.circle(screen, (40, 50, 40), (plot_cx, plot_cy), rr, 1)
+        # Cross hairs
+        pygame.draw.line(screen, (40, 50, 40),
+                         (plot_cx - plot_r, plot_cy), (plot_cx + plot_r, plot_cy), 1)
+        pygame.draw.line(screen, (40, 50, 40),
+                         (plot_cx, plot_cy - plot_r), (plot_cx, plot_cy + plot_r), 1)
+
+        # Robot marker
+        pygame.draw.circle(screen, (0, 150, 255), (plot_cx, plot_cy), 4, 0)
+
+        # Scan points
+        for pt in lidar_scan:
+            a_rad = math.radians(pt["angle"])
+            d_mm = pt["dist_mm"]
+            r_px = min(d_mm / max_range_mm, 1.0) * plot_r
+            px = int(plot_cx + r_px * math.cos(a_rad))
+            py = int(plot_cy - r_px * math.sin(a_rad))
+            pygame.draw.circle(screen, (0, 255, 80), (px, py), 3, 0)
+
+        # Range labels
+        for ring_m in [1, 2, 3, 4]:
+            rr = int(ring_m * 1000 / max_range_mm * plot_r)
+            lbl = feed_font.render(f"{ring_m}m", True, (80, 80, 80))
+            screen.blit(lbl, (plot_cx + 3, plot_cy - rr - 12))
 
     pygame.display.flip()
 
@@ -476,6 +547,8 @@ def main():
     last_policy_tick = 0.0
     raw_actions = [0.0, 0.0, 0.0]
     motor_cmd = (0.0, 0.0, 0.0, 0.0)
+    last_depth = generate_synthetic_depth(robot, target)
+    last_scan = generate_lidar_scan(robot, target) if runner.has_lidar else []
     paused = False
     running = True
 
@@ -509,22 +582,22 @@ def main():
             elif event.type == pygame.MOUSEBUTTONDOWN:
                 if event.button == 1:
                     # Check if clicking near target
-                    ox = WINDOW_W // 4
-                    oy = WINDOW_H // 2
+                    _ox = SCENE_W // 2
+                    _oy = WINDOW_H // 2
                     mx, my = event.pos
-                    tw = int(ox + target.x * WORLD_SCALE)
-                    th = int(oy - target.y * WORLD_SCALE)
+                    tw = int(_ox + target.x * WORLD_SCALE)
+                    th = int(_oy - target.y * WORLD_SCALE)
                     if abs(mx - tw) < 20 and abs(my - th) < 20:
                         target.dragging = True
             elif event.type == pygame.MOUSEBUTTONUP:
                 target.dragging = False
             elif event.type == pygame.MOUSEMOTION:
                 if target.dragging:
-                    ox = WINDOW_W // 4
-                    oy = WINDOW_H // 2
+                    _ox = SCENE_W // 2
+                    _oy = WINDOW_H // 2
                     mx, my = event.pos
-                    target.x = (mx - ox) / WORLD_SCALE
-                    target.y = -(my - oy) / WORLD_SCALE
+                    target.x = (mx - _ox) / WORLD_SCALE
+                    target.y = -(my - _oy) / WORLD_SCALE
 
         if not paused and now - last_policy_tick >= policy_interval:
             # Generate synthetic inputs
@@ -532,6 +605,8 @@ def main():
             rgb = generate_synthetic_rgb(robot, target)
             bbox = compute_bbox(robot, target)
             scan = generate_lidar_scan(robot, target) if runner.has_lidar else []
+            last_depth = depth
+            last_scan = scan
 
             if bbox is not None:
                 raw_actions = runner.step(rgb, depth, bbox, scan, desired_dist)
@@ -557,7 +632,8 @@ def main():
             robot.apply_motor_command(*motor_cmd, dt)
 
         draw_scene(screen, robot, target, raw_actions, motor_cmd,
-                   desired_dist, info_lines)
+                   desired_dist, info_lines,
+                   depth_frame=last_depth, lidar_scan=last_scan)
 
     # Stop motors on exit
     if udp_sock:

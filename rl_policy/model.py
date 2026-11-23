@@ -28,11 +28,9 @@ class Actor(nn.Module):
         use_lidar: bool = True,
         lidar_output_dim: int = 64,
         lidar_use_proj: bool = False,
-        tanh_output: bool = False,
     ) -> None:
         super().__init__()
         self.use_compressor = use_compressor
-        self.tanh_output = tanh_output
         self.use_lidar = use_lidar
         self.lidar_use_proj = lidar_use_proj
         self.cnn_channels = cnn_channels
@@ -98,8 +96,6 @@ class Actor(nn.Module):
             mlp_layers.append(nn.ELU())
             prev = dim
         mlp_layers.append(nn.Linear(prev, action_dim))
-        if tanh_output:
-            mlp_layers.append(nn.Tanh())
         self.mlp = nn.Sequential(*mlp_layers)
 
     def forward(
@@ -246,14 +242,11 @@ def load_actor(path: str, device: str = "cuda") -> Actor:
     actor_sd = ckpt["actor_state_dict"]
 
     cfg = _detect_variant(actor_sd)
-    cfg["tanh_output"] = ckpt.get("tanh_output", False)
-
     label = "depth" if cfg["cnn_channels"] == 1 else "rgbd"
-    tanh_tag = " tanh" if cfg["tanh_output"] else ""
     print(f"Loaded: {label} | cnn={list(cfg['cnn_layer_channels'])} "
           f"state={cfg['state_dim']} actions={cfg['action_dim']} "
           f"lstm={cfg['lstm_hidden_dim']}x{cfg['lstm_num_layers']} "
-          f"lidar={cfg['use_lidar']}{tanh_tag}")
+          f"lidar={cfg['use_lidar']}")
 
     model = Actor(**cfg)
     model.load_state_dict(_remap_keys(actor_sd), strict=True)

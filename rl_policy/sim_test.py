@@ -152,36 +152,69 @@ def scale_actions(raw_actions):
     return vx, vy, trans_speed, rot_speed
 
 
+ROOM_HALF_W = 3.0   # meters, room is 6m wide
+ROOM_DEPTH = 8.0    # meters, back wall distance
+CAMERA_H = 0.3      # meters, camera height above floor
+DEPTH_VIS_MAX = 5000 # mm, colormap ceiling for visualization
+
 def generate_synthetic_depth(robot: SimRobot, target: SimTarget,
                              img_w: int = 320, img_h: int = 240) -> np.ndarray:
-    """Generate a synthetic depth frame with the target as a blob."""
-    depth = np.full((img_h, img_w), 10000, dtype=np.uint16)  # 10m background
+    """Generate a synthetic depth frame with floor, walls, and target."""
+    fov_h_rad = math.radians(87)
+    fov_v_rad = math.radians(58)
+    tan_hh = math.tan(fov_h_rad / 2)
+    tan_vh = math.tan(fov_v_rad / 2)
 
-    # Target position relative to robot body frame
-    dx = target.x - robot.x
-    dy = target.y - robot.y
     cos_h = math.cos(-robot.heading)
     sin_h = math.sin(-robot.heading)
-    local_x = dx * cos_h - dy * sin_h   # forward
-    local_y = dx * sin_h + dy * cos_h   # right
 
-    dist = math.sqrt(dx ** 2 + dy ** 2)
-    if dist < 0.05:
-        dist = 0.05
+    # Per-pixel ray directions in camera frame
+    u = np.linspace(-tan_hh, tan_hh, img_w).astype(np.float32)
+    v = np.linspace(-tan_vh, tan_vh, img_h).astype(np.float32)
+    uu, vv = np.meshgrid(u, v)
+    # ray_cam: (forward=1, right=uu, down=vv)
 
-    if local_x > 0.01:  # target is in front
-        # Project to image coordinates (simple pinhole)
-        fov_h = 87  # D435 horizontal FOV
-        fov_v = 58  # D435 vertical FOV
-        cx_img = img_w / 2 + (local_y / local_x) * (img_w / 2) / math.tan(math.radians(fov_h / 2))
-        cy_img = img_h / 2  # assume same height
+    # Floor: y_world = 0, camera at CAMERA_H
+    # In camera frame, floor hit when vv * z = CAMERA_H → z = CAMERA_H / vv
+    floor_depth = np.full((img_h, img_w), 30000, dtype=np.float32)
+    floor_mask = vv > 0.01
+    floor_depth[floor_mask] = CAMERA_H / vv[floor_mask]  # meters forward
+    floor_depth_mm = (floor_depth * 1000).astype(np.uint16)
 
-        # Target apparent size (assume 0.3m wide object)
+    # Back wall: a wall at ROOM_DEPTH in front of the robot (world frame)
+    # Transform wall to robot body frame
+    wall_depth = np.full((img_h, img_w), 30000, dtype=np.uint16)
+    wall_z = ROOM_DEPTH  # meters forward
+    wall_depth[:] = int(wall_z * 1000)
+
+    # Side walls: left wall and right wall at ±ROOM_HALF_W in world frame
+    # In camera frame, side wall at local_y = ±d hits when uu * z = ±d → z = d / |uu|
+    for sign in [-1, 1]:
+        wall_world_y = sign * ROOM_HALF_W
+        # Transform to robot local frame
+        local_y = -robot.x * sin_h + (wall_world_y - robot.y) * cos_h
+        side_mask = (sign * uu) > 0.01
+        side_z = np.full((img_h, img_w), 30000.0, dtype=np.float32)
+        side_z[side_mask] = abs(local_y) / np.abs(uu[side_mask])
+        side_z_mm = np.clip(side_z * 1000, 0, 30000).astype(np.uint16)
+        wall_depth = np.minimum(wall_depth, side_z_mm)
+
+    # Composite: take nearest surface
+    depth = np.minimum(floor_depth_mm, wall_depth)
+
+    # Target object
+    dx = target.x - robot.x
+    dy = target.y - robot.y
+    local_x = dx * cos_h - dy * sin_h
+    local_y = dx * sin_h + dy * cos_h
+    dist = max(math.sqrt(dx ** 2 + dy ** 2), 0.05)
+
+    if local_x > 0.01:
+        cx_img = img_w / 2 + (local_y / local_x) * (img_w / 2) / tan_hh
+        cy_img = img_h / 2
         target_size_m = 0.3
-        target_size_px = int((target_size_m / dist) * (img_w / 2) / math.tan(math.radians(fov_h / 2)))
+        target_size_px = int((target_size_m / dist) * (img_w / 2) / tan_hh)
         target_size_px = max(5, min(target_size_px, img_w))
-
-        # Draw target as circular blob at correct depth
         depth_mm = int(dist * 1000)
         cx_i, cy_i = int(cx_img), int(cy_img)
         r = target_size_px // 2
@@ -419,8 +452,8 @@ def draw_scene(screen, robot: SimRobot, target: SimTarget,
     if depth_frame is not None:
         label = feed_font.render("DEPTH FEED", True, (0, 200, 255))
         screen.blit(label, (FEED_X, 10))
-        depth_clipped = np.clip(depth_frame, 0, MAX_DEPTH_MM).astype(np.float32)
-        depth_norm = (depth_clipped / MAX_DEPTH_MM * 255).astype(np.uint8)
+        depth_clipped = np.clip(depth_frame, 0, DEPTH_VIS_MAX).astype(np.float32)
+        depth_norm = (depth_clipped / DEPTH_VIS_MAX * 255).astype(np.uint8)
         depth_color = cv2.applyColorMap(depth_norm, cv2.COLORMAP_TURBO)
         depth_color = cv2.cvtColor(depth_color, cv2.COLOR_BGR2RGB)
         dh, dw = depth_color.shape[:2]

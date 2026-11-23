@@ -77,14 +77,14 @@ def set_lidar_reader(lidar):
 # Policy runs at 4 Hz (matching sim decimation: dt=0.01667 × 15 steps)
 POLICY_HZ = 4
 
-# Action scaling — conservative defaults, tune on real robot
-FORWARD_SCALE = 0.4
-STRAFE_SCALE = 0.4
-YAW_SCALE = 0.5
+# Action scaling — policy outputs [-1,1] are normalized, scale up for real robot
+FORWARD_SCALE = 1.0
+STRAFE_SCALE = 1.0
+YAW_SCALE = 1.0
 
-# Motor limits (matching object_track.py)
-MAX_ROT_SPEED = 3.0
-MAX_RANGE_SPEED = 5.0
+# Motor limits in turns/s (ODrive velocity units)
+MAX_ROT_SPEED = 5.0
+MAX_RANGE_SPEED = 8.0
 
 # Target loss timeouts
 COAST_TIMEOUT = 0.5     # seconds: coast on last command

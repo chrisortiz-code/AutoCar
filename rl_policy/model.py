@@ -143,6 +143,8 @@ def _remap_keys(actor_sd: dict[str, torch.Tensor]) -> dict[str, torch.Tensor]:
         new_k = k
         if k.startswith("cnns.policy."):
             new_k = k.replace("cnns.policy.", "cnn.")
+        elif k.startswith("cnn_compressor.compress."):
+            new_k = k.replace("cnn_compressor.compress.", "rgbd_compressor.")
         elif k.startswith("rgbd_compressor.compress."):
             new_k = k.replace("rgbd_compressor.compress.", "rgbd_compressor.")
         elif k.startswith("lidar_encoder.encoder."):
@@ -169,10 +171,11 @@ def _detect_variant(actor_sd: dict[str, torch.Tensor]) -> dict:
         cnn_layer_channels.append(actor_sd[key].shape[0])
 
     # Compressor
-    has_compressor = "rgbd_compressor.compress.0.weight" in actor_sd
+    has_compressor = "rgbd_compressor.compress.0.weight" in actor_sd or "cnn_compressor.compress.0.weight" in actor_sd
     cnn_compress_dim = 128
     if has_compressor:
-        cnn_compress_dim = actor_sd["rgbd_compressor.compress.0.bias"].shape[0]
+        compress_key = "cnn_compressor.compress.0.bias" if "cnn_compressor.compress.0.bias" in actor_sd else "rgbd_compressor.compress.0.bias"
+        cnn_compress_dim = actor_sd[compress_key].shape[0]
         vision_dim = cnn_compress_dim
     else:
         # Compute CNN flat dim from last conv: run a dummy

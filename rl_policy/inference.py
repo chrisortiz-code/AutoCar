@@ -15,7 +15,7 @@ import numpy as np
 import torch
 import cv2
 
-from rl_policy.model import Actor, load_actor
+from rl_policy.model import Actor, load_actor, _detect_variant, _remap_keys
 
 MAX_DEPTH_M = 30.0
 MAX_DEPTH_MM = MAX_DEPTH_M * 1000.0
@@ -36,16 +36,26 @@ class PolicyRunner:
             print(f"GPU memory capped at {GPU_MEMORY_FRACTION:.0%} of available")
 
         traced_path = checkpoint_path.replace(".pt", "_traced_fp16.pt")
-        if os.path.exists(traced_path):
+        has_raw = os.path.exists(checkpoint_path)
+        has_traced = os.path.exists(traced_path)
+
+        if has_traced:
             print(f"Loading TorchScript FP16: {traced_path}")
             self.traced = torch.jit.load(traced_path, map_location=self.device)
             self.traced.eval()
-            self.model = load_actor(checkpoint_path, device)
             self.fp16 = True
-        else:
+            if has_raw:
+                self.model = load_actor(checkpoint_path, device)
+            else:
+                self.model = self._build_model_from_traced(traced_path, device)
+        elif has_raw:
             self.traced = None
             self.model = load_actor(checkpoint_path, device)
             self.fp16 = False
+        else:
+            raise FileNotFoundError(
+                f"Neither {checkpoint_path} nor {traced_path} found"
+            )
 
         self.hidden: tuple[torch.Tensor, torch.Tensor] | None = None
         self.step_count = 0
@@ -62,6 +72,72 @@ class PolicyRunner:
     @property
     def action_dim(self) -> int:
         return self.model.action_dim
+
+    @staticmethod
+    def _build_model_from_traced(traced_path: str, device: str) -> Actor:
+        """Build an Actor stub from the traced model's saved raw checkpoint metadata.
+
+        When only the traced FP16 file exists, we load the original actor
+        state dict that was embedded during export (the traced file is a
+        TorchScript archive — we pull the original config from its weights).
+        Alternatively, we infer the config from the traced parameter shapes.
+        """
+        traced = torch.jit.load(traced_path, map_location="cpu")
+        sd = dict(traced.state_dict())
+        remap = {}
+        for k, v in sd.items():
+            clean = k.replace("actor.", "", 1) if k.startswith("actor.") else k
+            remap[clean] = v
+        cnn_ch = remap["cnn.0.weight"].shape[1]
+        cnn_layers = []
+        for i in range(0, 20, 2):
+            key = f"cnn.{i}.weight"
+            if key not in remap:
+                break
+            cnn_layers.append(remap[key].shape[0])
+        has_lidar = any(k.startswith("lidar_encoder.") for k in remap)
+        has_lidar_proj = "lidar_proj.weight" in remap
+        lidar_out = 64
+        if has_lidar and has_lidar_proj:
+            lidar_out = remap["lidar_proj.bias"].shape[0]
+        elif not has_lidar:
+            lidar_out = 0
+        has_comp = "rgbd_compressor.0.weight" in remap
+        comp_dim = 128
+        if has_comp:
+            comp_dim = remap["rgbd_compressor.0.bias"].shape[0]
+        hd = remap["lstm.weight_hh_l0"].shape[1]
+        nl = 0
+        while f"lstm.weight_ih_l{nl}" in remap:
+            nl += 1
+        mlp_dims = []
+        for i in range(0, 20, 2):
+            key = f"mlp.{i}.weight"
+            if key not in remap:
+                break
+            if f"mlp.{i + 2}.weight" in remap:
+                mlp_dims.append(remap[key].shape[0])
+        action_dim = remap[f"mlp.{len(mlp_dims) * 2}.bias"].shape[0]
+        lstm_input = remap["lstm.weight_ih_l0"].shape[1]
+        vision_dim = comp_dim if has_comp else cnn_layers[-1] * 4 * 4
+        state_dim = lstm_input - vision_dim - (lidar_out if has_lidar else 0)
+
+        cfg = dict(
+            cnn_channels=cnn_ch, cnn_layer_channels=tuple(cnn_layers),
+            state_dim=state_dim, action_dim=action_dim,
+            lstm_hidden_dim=hd, lstm_num_layers=nl,
+            mlp_dims=tuple(mlp_dims), use_compressor=has_comp,
+            cnn_compress_dim=comp_dim, use_lidar=has_lidar,
+            lidar_output_dim=lidar_out, lidar_use_proj=has_lidar_proj,
+        )
+        label = "depth" if cnn_ch == 1 else "rgbd"
+        print(f"Loaded (traced-only): {label} | cnn={list(cnn_layers)} "
+              f"state={state_dim} actions={action_dim} "
+              f"lstm={hd}x{nl} lidar={has_lidar}")
+        model = Actor(**cfg)
+        model.load_state_dict(remap, strict=True)
+        model.to(device).eval()
+        return model
 
     def reset(self) -> None:
         self.hidden = None

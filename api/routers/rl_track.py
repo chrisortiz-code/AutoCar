@@ -90,16 +90,22 @@ MAX_RANGE_SPEED = 10.0
 COAST_TIMEOUT = 0.5     # seconds: coast on last command
 STOP_TIMEOUT = 2.0      # seconds: stop and reset LSTM
 
-# Default model checkpoint — first non-traced .pt in checkpoints/
+# Default model checkpoint — PolicyRunner handles traced-only files
 _CKPT_DIR = os.path.join(os.path.dirname(__file__), "..", "..", "rl_policy", "checkpoints")
+_DEFAULT_MODEL = "depthonly_curriculum.pt"
 DEFAULT_CHECKPOINT = ""
 if os.path.isdir(_CKPT_DIR):
-    _candidates = sorted(
-        f for f in os.listdir(_CKPT_DIR)
-        if f.endswith(".pt") and "_traced" not in f
-    )
-    if _candidates:
-        DEFAULT_CHECKPOINT = os.path.join(_CKPT_DIR, _candidates[0])
+    _preferred = os.path.join(_CKPT_DIR, _DEFAULT_MODEL)
+    _preferred_traced = _preferred.replace(".pt", "_traced_fp16.pt")
+    if os.path.isfile(_preferred) or os.path.isfile(_preferred_traced):
+        DEFAULT_CHECKPOINT = _preferred
+    else:
+        _candidates = sorted(
+            f for f in os.listdir(_CKPT_DIR)
+            if f.endswith(".pt") and "_traced" not in f
+        )
+        if _candidates:
+            DEFAULT_CHECKPOINT = os.path.join(_CKPT_DIR, _candidates[0])
 
 
 def _clamp(value, low, high):
@@ -497,7 +503,8 @@ def start_rl(body: RLStartBody = RLStartBody()):
         return {"ok": False, "error": "already running"}
 
     checkpoint = body.checkpoint if body.checkpoint else DEFAULT_CHECKPOINT
-    if not os.path.exists(checkpoint):
+    traced = checkpoint.replace(".pt", "_traced_fp16.pt")
+    if not os.path.exists(checkpoint) and not os.path.exists(traced):
         return {"ok": False, "error": f"checkpoint not found: {checkpoint}"}
 
     _stop_event.clear()

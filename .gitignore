@@ -13,3 +13,8 @@ android/app/build/
 android/app/.cxx/
 android/local.properties
 *.apk
+
+# Large tracker ONNX models (download separately)
+object_tracking/models/mixformer_v2_sim.onnx
+object_tracking/models/litetrack_template.onnx
+object_tracking/models/litetrack_search.onnx

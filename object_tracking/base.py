@@ -49,9 +49,10 @@ class ObjectMatcher:
 
 BACKENDS = {
     "sift":       "object_tracking.sift_backend",
-    "lightglue":  "object_tracking.lightglue_backend",
     "nanotrack":  "object_tracking.nanotrack_backend",
     "histogram":  "object_tracking.histogram_backend",
+    "mixformer":  "object_tracking.mixformer_backend",
+    "litetrack":  "object_tracking.litetrack_backend",
 }
 
 

@@ -53,6 +53,7 @@ BACKENDS = {
     "sift":       "object_tracking.sift_backend",
     "lightglue":  "object_tracking.lightglue_backend",
     "csrt":       "object_tracking.csrt_backend",
+    "vittrack":   "object_tracking.vittrack_backend",
 }
 
 

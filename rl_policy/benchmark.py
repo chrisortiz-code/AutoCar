@@ -216,30 +216,75 @@ def bench_full_pipeline(
     print_stats("Total (preprocess + inference)", times_ms)
 
 
-def bench_csrt(warmup: int, iterations: int) -> None:
-    """Benchmark CSRT tracker independently."""
+def bench_trackers(warmup: int, iterations: int) -> None:
+    """Benchmark all available OpenCV trackers."""
     import cv2
 
     print(f"\n{'=' * 60}")
-    print("3) CSRT tracker (synthetic frames)")
+    print("3) Tracker comparison (synthetic frames)")
     print(f"{'=' * 60}")
 
     h, w = 480, 640
-    tracker = cv2.TrackerCSRT.create() if hasattr(cv2, "TrackerCSRT") else cv2.TrackerCSRT_create()
+    init_frame = np.random.randint(0, 255, (h, w, 3), dtype=np.uint8)
+    bbox = (280, 200, 80, 80)
 
-    frame = np.random.randint(0, 255, (h, w, 3), dtype=np.uint8)
-    tracker.init(frame, (280, 200, 80, 80))
+    trackers = {}
 
-    times_ms = []
-    for i in range(warmup + iterations):
-        frame = np.random.randint(0, 255, (h, w, 3), dtype=np.uint8)
-        t0 = time.perf_counter()
-        tracker.update(frame)
-        elapsed = (time.perf_counter() - t0) * 1000.0
-        if i >= warmup:
-            times_ms.append(elapsed)
+    # CSRT
+    if hasattr(cv2, "TrackerCSRT_create"):
+        trackers["CSRT"] = cv2.TrackerCSRT_create()
+    elif hasattr(cv2, "TrackerCSRT"):
+        trackers["CSRT"] = cv2.TrackerCSRT.create()
 
-    print_stats("CSRT update", times_ms)
+    # ViTTrack
+    vittrack_model = os.path.join(
+        os.path.dirname(__file__), "..", "object_tracking", "models", "vittrack.onnx",
+    )
+    if os.path.isfile(vittrack_model) and hasattr(cv2, "TrackerVit"):
+        params = cv2.TrackerVit_Params()
+        params.net = vittrack_model
+        trackers["ViTTrack"] = cv2.TrackerVit.create(params)
+
+    # NanoTrack (if models available)
+    nano_backbone = os.path.join(
+        os.path.dirname(__file__), "..", "object_tracking", "models", "nanotrack_backbone.onnx",
+    )
+    nano_head = os.path.join(
+        os.path.dirname(__file__), "..", "object_tracking", "models", "nanotrack_head.onnx",
+    )
+    if os.path.isfile(nano_backbone) and os.path.isfile(nano_head) and hasattr(cv2, "TrackerNano"):
+        params = cv2.TrackerNano_Params()
+        params.backbone = nano_backbone
+        params.neckhead = nano_head
+        trackers["NanoTrack"] = cv2.TrackerNano.create(params)
+
+    # DaSiamRPN (if models available)
+    dasiam_dir = os.path.join(os.path.dirname(__file__), "..", "object_tracking", "models")
+    dasiam_model = os.path.join(dasiam_dir, "dasiamrpn_model.onnx")
+    dasiam_cls = os.path.join(dasiam_dir, "dasiamrpn_kernel_cls1.onnx")
+    dasiam_r1 = os.path.join(dasiam_dir, "dasiamrpn_kernel_r1.onnx")
+    if all(os.path.isfile(f) for f in [dasiam_model, dasiam_cls, dasiam_r1]) and hasattr(cv2, "TrackerDaSiamRPN"):
+        params = cv2.TrackerDaSiamRPN_Params()
+        params.model = dasiam_model
+        params.kernel_cls1 = dasiam_cls
+        params.kernel_r1 = dasiam_r1
+        trackers["DaSiamRPN"] = cv2.TrackerDaSiamRPN.create(params)
+
+    if not trackers:
+        print("  No trackers available")
+        return
+
+    for name, tracker in trackers.items():
+        tracker.init(init_frame, bbox)
+        times_ms = []
+        for i in range(warmup + iterations):
+            frame = np.random.randint(0, 255, (h, w, 3), dtype=np.uint8)
+            t0 = time.perf_counter()
+            tracker.update(frame)
+            elapsed = (time.perf_counter() - t0) * 1000.0
+            if i >= warmup:
+                times_ms.append(elapsed)
+        print_stats(name, times_ms)
 
 
 def main() -> None:
@@ -247,7 +292,7 @@ def main() -> None:
     parser.add_argument("--checkpoint", default="", help="Checkpoint path (default: auto)")
     parser.add_argument("--warmup", type=int, default=10, help="Warmup iterations")
     parser.add_argument("--iterations", type=int, default=200, help="Benchmark iterations")
-    parser.add_argument("--no-csrt", action="store_true", help="Skip CSRT benchmark")
+    parser.add_argument("--no-trackers", action="store_true", help="Skip tracker benchmarks")
     args = parser.parse_args()
 
     checkpoint = args.checkpoint or find_default_checkpoint()
@@ -265,11 +310,11 @@ def main() -> None:
     bench_model_forward(checkpoint, device, args.warmup, args.iterations)
     bench_full_pipeline(checkpoint, device, args.warmup, args.iterations)
 
-    if not args.no_csrt:
+    if not args.no_trackers:
         try:
-            bench_csrt(args.warmup, args.iterations)
+            bench_trackers(args.warmup, args.iterations)
         except Exception as e:
-            print(f"\n  CSRT benchmark skipped: {e}")
+            print(f"\n  Tracker benchmark skipped: {e}")
 
     print(f"\n{'=' * 60}")
     print("Summary")

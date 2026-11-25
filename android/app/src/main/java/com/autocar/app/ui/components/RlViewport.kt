@@ -70,7 +70,7 @@ fun RlViewport(
     var selectedCheckpoint by remember { mutableStateOf("") }
     var selectedBackend by remember { mutableStateOf("csrt") }
 
-    val backends = listOf("csrt", "orb", "akaze", "sift", "lightglue")
+    val backends = listOf("csrt", "vittrack", "orb", "akaze", "sift", "lightglue")
 
     DisposableEffect(Unit) {
         onDispose { rlVm.onTabHidden() }

@@ -42,7 +42,7 @@ UDP_PORT = int(os.getenv("UDP_PORT", "5555"))
 
 # ── Sim constants ────────────────────────────────────────────────────
 SIM_HZ = 30
-POLICY_HZ = 4
+POLICY_HZ = 15
 WINDOW_W, WINDOW_H = 1200, 700
 SCENE_W = 500      # width of the 2D scene panel
 WORLD_SCALE = 100  # pixels per meter
@@ -313,17 +313,20 @@ def draw_scene(screen, robot: SimRobot, target: SimTarget,
 
     screen.fill((30, 30, 30))
 
-    ox = SCENE_W // 2
-    oy = WINDOW_H // 2
+    # Camera follows the robot
+    ox = SCENE_W // 2 - int(robot.x * WORLD_SCALE)
+    oy = WINDOW_H // 2 + int(robot.y * WORLD_SCALE)
 
     def world_to_screen(wx, wy):
         return (int(ox + wx * WORLD_SCALE), int(oy - wy * WORLD_SCALE))
 
-    # Grid
-    for gx in range(-5, 6):
+    # Grid (centered around robot)
+    grid_cx = int(robot.x)
+    grid_cy = int(robot.y)
+    for gx in range(grid_cx - 5, grid_cx + 6):
         sx, _ = world_to_screen(gx, 0)
         pygame.draw.line(screen, (50, 50, 50), (sx, 0), (sx, WINDOW_H))
-    for gy in range(-4, 5):
+    for gy in range(grid_cy - 4, grid_cy + 5):
         _, sy = world_to_screen(0, gy)
         pygame.draw.line(screen, (50, 50, 50), (0, sy), (SCENE_W, sy))
 
@@ -613,9 +616,8 @@ def main():
                     desired_dist = max(desired_dist - 0.1, 0.1)
             elif event.type == pygame.MOUSEBUTTONDOWN:
                 if event.button == 1:
-                    # Check if clicking near target
-                    _ox = SCENE_W // 2
-                    _oy = WINDOW_H // 2
+                    _ox = SCENE_W // 2 - int(robot.x * WORLD_SCALE)
+                    _oy = WINDOW_H // 2 + int(robot.y * WORLD_SCALE)
                     mx, my = event.pos
                     tw = int(_ox + target.x * WORLD_SCALE)
                     th = int(_oy - target.y * WORLD_SCALE)
@@ -625,8 +627,8 @@ def main():
                 target.dragging = False
             elif event.type == pygame.MOUSEMOTION:
                 if target.dragging:
-                    _ox = SCENE_W // 2
-                    _oy = WINDOW_H // 2
+                    _ox = SCENE_W // 2 - int(robot.x * WORLD_SCALE)
+                    _oy = WINDOW_H // 2 + int(robot.y * WORLD_SCALE)
                     mx, my = event.pos
                     target.x = (mx - _ox) / WORLD_SCALE
                     target.y = -(my - _oy) / WORLD_SCALE

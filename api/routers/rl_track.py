@@ -80,9 +80,9 @@ def set_lidar_reader(lidar):
 POLICY_HZ = 4
 
 # Action scaling — policy outputs [-1,1] are normalized, scale up for real robot
-FORWARD_SCALE = 1.0
-STRAFE_SCALE = 1.0
-YAW_SCALE = 1.0
+FORWARD_SCALE = 5.0
+STRAFE_SCALE = 5.0
+YAW_SCALE = 5.0
 
 # Motor limits in turns/s (ODrive velocity units)
 MAX_ROT_SPEED = 10.0

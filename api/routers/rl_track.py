@@ -77,7 +77,7 @@ def set_lidar_reader(lidar):
 # ── Configuration ─────────────────────────────────────────────────────
 
 # Policy runs at 4 Hz (matching sim decimation: dt=0.01667 × 15 steps)
-POLICY_HZ = 4
+POLICY_HZ = 15
 
 # Action scaling — policy outputs [-1,1] are normalized, scale up for real robot
 FORWARD_SCALE = 5.0

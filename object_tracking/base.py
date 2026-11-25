@@ -48,13 +48,8 @@ class ObjectMatcher:
 
 
 BACKENDS = {
-    "orb":        "object_tracking.orb_backend",
-    "akaze":      "object_tracking.akaze_backend",
     "sift":       "object_tracking.sift_backend",
     "lightglue":  "object_tracking.lightglue_backend",
-    "csrt":       "object_tracking.csrt_backend",
-    "vittrack":   "object_tracking.vittrack_backend",
-    "mil":        "object_tracking.mil_backend",
     "dasiamrpn":  "object_tracking.dasiamrpn_backend",
     "nanotrack":  "object_tracking.nanotrack_backend",
 }

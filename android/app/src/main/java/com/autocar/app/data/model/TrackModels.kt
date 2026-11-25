@@ -10,7 +10,7 @@ data class TrackState(
     val rot_speed: Float = 0f,
     val vx: Float = 0f,
     val fps: Float = 0f,
-    val backend: String = "orb",
+    val backend: String = "sift",
     val follow: Boolean = false,
     val target_depth: Int = 0,
     val cur_depth: Int = 0,
@@ -26,6 +26,6 @@ data class SetRefBody(
 
 @Serializable
 data class TrackStartBody(
-    val backend: String = "orb",
+    val backend: String = "sift",
     val follow: Boolean = true,
 )

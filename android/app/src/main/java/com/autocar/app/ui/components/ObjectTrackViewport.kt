@@ -47,7 +47,7 @@ import com.autocar.app.viewmodel.TrackViewModel
 fun ObjectTrackViewport(
     trackVm: TrackViewModel = viewModel(),
     modifier: Modifier = Modifier,
-    selectedBackend: String = "orb",
+    selectedBackend: String = "sift",
     onBackendChange: ((String) -> Unit)? = null,
     selectedMode: String = "trace",
     onModeChange: ((String) -> Unit)? = null,
@@ -215,22 +215,7 @@ fun ObjectTrackViewport(
                     TrackModeButton("Follow", activeMode == "follow") { setMode("follow") }
                 }
 
-                // ── Backend selector ──
-                Text("Backend", style = MaterialTheme.typography.labelLarge, color = Gold)
-                val backends = listOf("orb", "akaze", "sift", "lightglue", "csrt")
-                FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    backends.forEach { backend ->
-                        FilterChip(
-                            selected = activeBackend == backend,
-                            onClick = { setBackend(backend) },
-                            label = { Text(backend) },
-                            colors = FilterChipDefaults.filterChipColors(
-                                selectedContainerColor = GoldDark.copy(alpha = 0.3f),
-                                selectedLabelColor = Gold,
-                            ),
-                        )
-                    }
-                }
+                // Backend is fixed to sift
 
                 // ── Start button ──
                 Button(

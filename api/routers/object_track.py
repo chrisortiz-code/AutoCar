@@ -1,7 +1,7 @@
 """
 Object tracking control endpoints.
 
-Uses the object_tracking module (ORB, AKAZE, SIFT, template backends) to track
+Uses the object_tracking module (SIFT backend) to track
 an arbitrary object selected via drag-to-select on the camera feed.
 """
 
@@ -32,7 +32,7 @@ _state = {
     "rot_speed": 0.0,
     "vx": 0.0,
     "fps": 0.0,
-    "backend": "orb",
+    "backend": "sift",
     "follow": False,
     "target_depth": 0,      # mm, 0 = not set
     "cur_depth": 0,         # mm, live depth reading
@@ -341,7 +341,7 @@ class SetRefBody(BaseModel):
 
 
 class TrackStartBody(BaseModel):
-    backend: str = "orb"
+    backend: str = "sift"
     follow: bool = True
 
 

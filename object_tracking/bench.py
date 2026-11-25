@@ -157,11 +157,11 @@ wrapper.addEventListener('mousedown', (e) => {
   hasSelection = false;
 });
 
-wrapper.addEventListener('mousemove', (e) => {
+document.addEventListener('mousemove', (e) => {
   if (!dragging) return;
   const rect = wrapper.getBoundingClientRect();
-  curX = (e.clientX - rect.left) / rect.width;
-  curY = (e.clientY - rect.top) / rect.height;
+  curX = Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width));
+  curY = Math.max(0, Math.min(1, (e.clientY - rect.top) / rect.height));
   const x1 = Math.max(0, Math.min(startX, curX));
   const y1 = Math.max(0, Math.min(startY, curY));
   const x2 = Math.min(1, Math.max(startX, curX));
@@ -169,12 +169,12 @@ wrapper.addEventListener('mousemove', (e) => {
   drawRect(x1, y1, x2, y2);
 });
 
-wrapper.addEventListener('mouseup', (e) => {
+function finishDrag(e) {
   if (!dragging) return;
   dragging = false;
   const rect = wrapper.getBoundingClientRect();
-  const endX = (e.clientX - rect.left) / rect.width;
-  const endY = (e.clientY - rect.top) / rect.height;
+  const endX = Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width));
+  const endY = Math.max(0, Math.min(1, (e.clientY - rect.top) / rect.height));
   selX1 = Math.max(0, Math.min(startX, endX));
   selY1 = Math.max(0, Math.min(startY, endY));
   selX2 = Math.min(1, Math.max(startX, endX));
@@ -186,18 +186,25 @@ wrapper.addEventListener('mouseup', (e) => {
   hasSelection = true;
   drawRect(selX1, selY1, selX2, selY2);
   refStatus.textContent = 'Press SPACE to confirm, ESC to cancel';
+}
+wrapper.addEventListener('mouseup', finishDrag);
+document.addEventListener('mouseup', (e) => {
+  if (dragging) finishDrag(e);
 });
 
 // Make overlay receive pointer events when frozen
 overlayCanvas.style.pointerEvents = 'auto';
 
 document.addEventListener('keydown', (e) => {
-  if (e.code === 'Space' && hasSelection) {
+  if (e.code === 'Space') {
     e.preventDefault();
-    fetch('/crop?x1='+selX1.toFixed(4)+'&y1='+selY1.toFixed(4)+
-          '&x2='+selX2.toFixed(4)+'&y2='+selY2.toFixed(4));
-    refStatus.textContent = 'Setting reference...';
-    unfreezeFeed();
+    modelSelect.blur();
+    if (hasSelection) {
+      fetch('/crop?x1='+selX1.toFixed(4)+'&y1='+selY1.toFixed(4)+
+            '&x2='+selX2.toFixed(4)+'&y2='+selY2.toFixed(4));
+      refStatus.textContent = 'Setting reference...';
+      unfreezeFeed();
+    }
   }
   if (e.code === 'Escape' && frozen) {
     unfreezeFeed();
@@ -530,7 +537,7 @@ class BenchServer:
 def main():
     parser = argparse.ArgumentParser(
         description="Benchmark object matching backends on live camera")
-    parser.add_argument("--backend", default="orb", choices=BACKENDS.keys())
+    parser.add_argument("--backend", default="sift", choices=BACKENDS.keys())
     parser.add_argument("--ref", default=None,
                         help="Path to reference image (skip crop step)")
     parser.add_argument("--camera", type=int, default=0)

@@ -44,9 +44,14 @@ BENCH_HTML = """<!DOCTYPE html>
          font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
          display: flex; flex-direction: column; align-items: center;
          min-height: 100vh; padding: 16px; }
-  header { display: flex; align-items: baseline; gap: 12px; width: 640px;
+  header { display: flex; align-items: center; gap: 12px; width: 640px;
            margin-bottom: 8px; }
   header h1 { font-size: 14px; font-weight: 600; color: #e0e0e0; }
+  #model-select { background: #2a2a2a; color: #d4d4d4; border: 1px solid #444;
+                   border-radius: 4px; padding: 3px 8px; font-size: 12px;
+                   font-family: inherit; cursor: pointer; outline: none; }
+  #model-select:hover { border-color: #666; }
+  #model-select:focus { border-color: #5a9a5a; }
   #badge { font-size: 11px; color: #777; margin-left: auto; }
   #wrapper { position: relative; width: 640px; height: 480px;
              border: 1px solid #333; cursor: crosshair; overflow: hidden; }
@@ -73,6 +78,7 @@ BENCH_HTML = """<!DOCTYPE html>
 <body>
   <header>
     <h1>Object Tracking</h1>
+    <select id="model-select"></select>
     <span id="badge">idle</span>
   </header>
   <div id="wrapper">
@@ -215,10 +221,35 @@ document.body.addEventListener('drop', (e) => {
 });
 
 const badgeEl = document.getElementById('badge');
+const modelSelect = document.getElementById('model-select');
+
+// Populate model dropdown
+(async () => {
+  try {
+    const r = await fetch('/backends');
+    const d = await r.json();
+    d.backends.forEach(name => {
+      const opt = document.createElement('option');
+      opt.value = name; opt.textContent = name;
+      if (name === d.active) opt.selected = true;
+      modelSelect.appendChild(opt);
+    });
+  } catch(e) {}
+})();
+
+modelSelect.addEventListener('change', async () => {
+  badgeEl.textContent = 'switching...';
+  statusEl.textContent = 'Loading ' + modelSelect.value + '...';
+  await fetch('/switch_backend?name=' + encodeURIComponent(modelSelect.value));
+});
+
 setInterval(async () => {
   try {
     const r = await fetch('/status');
     const s = await r.json();
+    if (s.backend && modelSelect.value !== s.backend) {
+      modelSelect.value = s.backend;
+    }
     if (s.has_ref) {
       refImg.src = '/ref_image?' + Date.now();
       refImg.style.display = 'inline';
@@ -268,6 +299,7 @@ class BenchServer:
         self._angle = 0.0
         self._fps = 0.0
         self._backend = ""
+        self._switch_to = None  # backend name requested by UI
 
         parent = self
 
@@ -348,6 +380,31 @@ class BenchServer:
                     else:
                         self.send_response(404)
                         self.end_headers()
+
+                elif path == "/backends":
+                    with parent._lock:
+                        data = {
+                            "backends": list(BACKENDS.keys()),
+                            "active": parent._backend,
+                        }
+                    self.send_response(200)
+                    self.send_header("Content-Type", "application/json")
+                    self.end_headers()
+                    self.wfile.write(json.dumps(data).encode())
+
+                elif path == "/switch_backend":
+                    qs = parse_qs(parsed.query)
+                    name = qs.get("name", [""])[0]
+                    if name in BACKENDS:
+                        with parent._lock:
+                            parent._switch_to = name
+                        self.send_response(200)
+                        self.end_headers()
+                        self.wfile.write(b"ok")
+                    else:
+                        self.send_response(400)
+                        self.end_headers()
+                        self.wfile.write(b"unknown backend")
 
                 elif path == "/status":
                     with parent._lock:
@@ -454,6 +511,12 @@ class BenchServer:
         with self._lock:
             return self._frozen_frame.copy() if self._frozen_frame is not None else None
 
+    def poll_switch(self):
+        with self._lock:
+            s = self._switch_to
+            self._switch_to = None
+        return s
+
     def clear_ref(self):
         with self._lock:
             self._has_ref = False
@@ -467,7 +530,7 @@ class BenchServer:
 def main():
     parser = argparse.ArgumentParser(
         description="Benchmark object matching backends on live camera")
-    parser.add_argument("--backend", required=True, choices=BACKENDS.keys())
+    parser.add_argument("--backend", default="orb", choices=BACKENDS.keys())
     parser.add_argument("--ref", default=None,
                         help="Path to reference image (skip crop step)")
     parser.add_argument("--camera", type=int, default=0)
@@ -566,6 +629,17 @@ def main():
                     latencies.clear()
                     server.clear_ref()
                     print("Reset.")
+
+                switch_name = server.poll_switch()
+                if switch_name and switch_name != matcher.name:
+                    print(f"Switching backend: {matcher.name} -> {switch_name}")
+                    old_matcher = matcher
+                    matcher = create_matcher(switch_name)
+                    old_matcher.close()
+                    has_ref = False
+                    latencies.clear()
+                    server.clear_ref()
+                    print(f"Backend ready: {matcher.name}")
 
             # Run matching
             match = None

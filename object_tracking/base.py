@@ -52,6 +52,7 @@ BACKENDS = {
     "lightglue":  "object_tracking.lightglue_backend",
     "dasiamrpn":  "object_tracking.dasiamrpn_backend",
     "nanotrack":  "object_tracking.nanotrack_backend",
+    "histogram":  "object_tracking.histogram_backend",
 }
 
 

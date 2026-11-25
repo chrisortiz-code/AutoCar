@@ -58,6 +58,8 @@ _latest_jpeg = None
 _latest_depth_jpeg = None
 _camera_reader = None
 _lidar_reader = None
+_cached_runner = None
+_cached_runner_path = None
 
 
 def set_camera_reader(camera):
@@ -161,20 +163,18 @@ def _scale_actions(raw_actions):
 
 # ── Tracker thread ────────────────────────────────────────────────────
 
-def _rl_tracker_loop(desired_dist_m, checkpoint_path, backend="csrt"):
-    global _latest_jpeg, _latest_depth_jpeg, _reset_flag
-
-    with _lock:
-        _state["status"] = "loading"
-        _state["status_msg"] = f"Loading RL policy + {backend} tracker..."
-
+def _load_model_async(checkpoint_path, result_holder, stop_event):
+    """Load PolicyRunner on a background thread, storing it in result_holder[0]."""
+    global _cached_runner, _cached_runner_path
     import sys
     sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", ".."))
-
     from rl_policy.inference import PolicyRunner
-    from object_tracking.base import create_matcher
 
-    # Determine device
+    if _cached_runner is not None and _cached_runner_path == checkpoint_path:
+        _cached_runner.reset()
+        result_holder[0] = _cached_runner
+        return
+
     try:
         import torch
         device = "cuda" if torch.cuda.is_available() else "cpu"
@@ -182,17 +182,24 @@ def _rl_tracker_loop(desired_dist_m, checkpoint_path, backend="csrt"):
         device = "cpu"
 
     runner = PolicyRunner(checkpoint_path, device=device)
-    tracker = create_matcher(backend, fallback=True)
+    if not stop_event.is_set():
+        _cached_runner = runner
+        _cached_runner_path = checkpoint_path
+        result_holder[0] = runner
 
-    ckpt_name = os.path.splitext(os.path.basename(checkpoint_path))[0]
+
+def _rl_tracker_loop(desired_dist_m, checkpoint_path, backend="csrt"):
+    global _latest_jpeg, _latest_depth_jpeg, _reset_flag
+
     with _lock:
-        _state["model_variant"] = (
-            "depth" if runner.model.cnn_channels == 1 else "rgbd"
-        ) + f"_{runner.model.action_dim}a"
-        _state["model_name"] = ckpt_name
-        _state["action_dim"] = runner.action_dim
+        _state["status"] = "loading"
         _state["status_msg"] = "Connecting camera..."
 
+    import sys
+    sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", ".."))
+    from object_tracking.base import create_matcher
+
+    # Start camera immediately
     use_realsense = _camera_reader is not None and _camera_reader.connected
     cap = None
     if not use_realsense:
@@ -207,6 +214,20 @@ def _rl_tracker_loop(desired_dist_m, checkpoint_path, backend="csrt"):
                 _state["status_msg"] = "Camera failed to open"
             return
 
+    # Load model in parallel while camera streams
+    runner_holder = [None]
+    model_thread = threading.Thread(
+        target=_load_model_async,
+        args=(checkpoint_path, runner_holder, _stop_event),
+        daemon=True,
+    )
+    model_thread.start()
+
+    with _lock:
+        _state["status_msg"] = "Loading RL model..."
+
+    tracker = create_matcher(backend, fallback=True)
+
     udp_sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     udp_dest = (UDP_HOST, UDP_PORT)
     policy_interval = 1.0 / POLICY_HZ
@@ -216,15 +237,29 @@ def _rl_tracker_loop(desired_dist_m, checkpoint_path, backend="csrt"):
     has_reference = False
     frozen_until = 0.0
     frozen_jpeg = None
+    runner = None
 
     fps_count = 0
     fps_t0 = time.perf_counter()
 
     with _lock:
-        _state.update(status="streaming", status_msg="", desired_dist=desired_dist_m)
+        _state.update(status="streaming", status_msg="Loading RL model...",
+                      desired_dist=desired_dist_m)
 
     try:
         while not _stop_event.is_set():
+            # ── Check if model finished loading ──
+            if runner is None and runner_holder[0] is not None:
+                runner = runner_holder[0]
+                ckpt_name = os.path.splitext(os.path.basename(checkpoint_path))[0]
+                with _lock:
+                    _state["model_variant"] = (
+                        "depth" if runner.model.cnn_channels == 1 else "rgbd"
+                    ) + f"_{runner.model.action_dim}a"
+                    _state["model_name"] = ckpt_name
+                    _state["action_dim"] = runner.action_dim
+                    _state["status_msg"] = ""
+
             # ── Get camera frame ──
             depth_frame = None
             if use_realsense:
@@ -253,7 +288,8 @@ def _rl_tracker_loop(desired_dist_m, checkpoint_path, backend="csrt"):
                 has_reference = False
                 frozen_jpeg = None
                 frozen_until = 0.0
-                runner.reset()
+                if runner is not None:
+                    runner.reset()
                 if driving:
                     udp_sock.sendto(b"S", udp_dest)
                     driving = False
@@ -263,7 +299,7 @@ def _rl_tracker_loop(desired_dist_m, checkpoint_path, backend="csrt"):
                                   target_depth=0, cur_depth=0)
 
             # ── Process new bounding box ──
-            if bboxes:
+            if bboxes and runner is not None:
                 x1, y1, x2, y2 = bboxes[-1]
                 px1 = int(_clamp(x1, 0, 1) * fw)
                 py1 = int(_clamp(y1, 0, 1) * fh)
@@ -299,7 +335,7 @@ def _rl_tracker_loop(desired_dist_m, checkpoint_path, backend="csrt"):
             display = frame.copy()
             bbox = None
 
-            if has_reference:
+            if has_reference and runner is not None:
                 t_csrt = time.perf_counter()
                 bbox = tracker.find(frame)
                 csrt_ms = (time.perf_counter() - t_csrt) * 1000.0
@@ -397,6 +433,10 @@ def _rl_tracker_loop(desired_dist_m, checkpoint_path, backend="csrt"):
 
                     last_policy_tick = now
 
+            # ── Loading overlay ──
+            if runner is None:
+                _draw_text(display, "Loading RL model...", (8, 20), (0, 255, 255))
+
             # ── Build display frame ──
             if bbox is not None:
                 # Paint green overlay on display for debug
@@ -474,6 +514,7 @@ def _rl_tracker_loop(desired_dist_m, checkpoint_path, backend="csrt"):
         tracker.close()
         if cap and not use_realsense:
             cap.release()
+        model_thread.join(timeout=10)
         with _lock:
             _state.update(status="idle", confidence=0.0, actions=[0.0, 0.0, 0.0],
                           lstm_step=0, fps=0.0)

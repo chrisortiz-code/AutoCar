@@ -633,13 +633,19 @@ def main():
                 switch_name = server.poll_switch()
                 if switch_name and switch_name != matcher.name:
                     print(f"Switching backend: {matcher.name} -> {switch_name}")
-                    old_matcher = matcher
-                    matcher = create_matcher(switch_name)
-                    old_matcher.close()
-                    has_ref = False
-                    latencies.clear()
-                    server.clear_ref()
-                    print(f"Backend ready: {matcher.name}")
+                    try:
+                        new_matcher = create_matcher(switch_name)
+                    except Exception as e:
+                        print(f"Failed to load {switch_name}: {e}")
+                        server.set_metrics(backend=matcher.name)
+                        new_matcher = None
+                    if new_matcher is not None:
+                        matcher.close()
+                        matcher = new_matcher
+                        has_ref = False
+                        latencies.clear()
+                        server.clear_ref()
+                        print(f"Backend ready: {matcher.name}")
 
             # Run matching
             match = None

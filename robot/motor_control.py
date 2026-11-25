@@ -294,7 +294,13 @@ class MecanumUSB:
         ax.controller.config.vel_limit = self.max_vel
         time.sleep(0.05)
         ax.requested_state = AXIS_STATE_CLOSED_LOOP_CONTROL
-        time.sleep(0.3)
+
+        # Wait up to 2s for closed-loop — CAN + encoder index search can be slow
+        for _ in range(20):
+            time.sleep(0.1)
+            state = ax.current_state
+            if state == 8:
+                break
 
         state = ax.current_state
         errors = ax.active_errors
@@ -310,8 +316,21 @@ class MecanumUSB:
                 print(f"  {role}: calibration error 0x{errors:X}, clearing...")
                 odrv.clear_errors()
                 time.sleep(0.2)
+            else:
+                print(f"  {role}: calibration OK (not saving to flash over CAN "
+                      "— use odrivetool or Windows to persist).")
+            # Re-apply controller config (lost if ODrive rebooted from save)
+            ax.controller.config.control_mode = CONTROL_MODE_VELOCITY_CONTROL
+            ax.controller.config.input_mode = INPUT_MODE_VEL_RAMP
+            ax.controller.config.vel_ramp_rate = VEL_RAMP_RATE
+            ax.config.motor.current_soft_max = self.current_limit
+            ax.controller.config.vel_limit = self.max_vel
+            time.sleep(0.05)
             ax.requested_state = AXIS_STATE_CLOSED_LOOP_CONTROL
-            time.sleep(0.3)
+            for _ in range(20):
+                time.sleep(0.1)
+                if ax.current_state == 8:
+                    break
             state = ax.current_state
             errors = ax.active_errors
 
@@ -322,9 +341,12 @@ class MecanumUSB:
             print(f"  {role} armed.")
 
     def arm_all(self):
-        for role in self.connected:
+        for role in list(self.connected):
             if role in self.active_roles:
-                self.arm(role)
+                try:
+                    self.arm(role)
+                except Exception as e:
+                    print(f"  {role}: arm failed ({e}), skipping.")
 
     def set_vel(self, role, velocity):
         if role not in self.connected:

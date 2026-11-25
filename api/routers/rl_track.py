@@ -544,10 +544,13 @@ def stop_rl():
 def list_checkpoints():
     if not os.path.isdir(_CKPT_DIR):
         return {"checkpoints": []}
-    files = sorted(
-        f for f in os.listdir(_CKPT_DIR)
-        if f.endswith(".pt") and "_traced" not in f
-    )
+    raw = {f for f in os.listdir(_CKPT_DIR) if f.endswith(".pt") and "_traced" not in f}
+    traced_only = {
+        f.replace("_traced_fp16.pt", ".pt")
+        for f in os.listdir(_CKPT_DIR)
+        if f.endswith("_traced_fp16.pt") and f.replace("_traced_fp16.pt", ".pt") not in raw
+    }
+    files = sorted(raw | traced_only)
     return {"checkpoints": files}
 
 

@@ -17,8 +17,12 @@ import cv2
 
 from rl_policy.model import Actor, load_actor, _detect_variant, _remap_keys
 
-MAX_DEPTH_M = 30.0
+DEFAULT_DEPTH_RANGE_M = 30.0  # Existing AutoCar models use this range.
+TRACE_DEPTH_RANGE_M = 10.0  # Trace depthonly_curriculum checkpoint training range.
+MAX_DEPTH_M = DEFAULT_DEPTH_RANGE_M  # Backward-compatible default for callers.
 MAX_DEPTH_MM = MAX_DEPTH_M * 1000.0
+MAX_LIDAR_RANGE_M = 30.0
+MAX_LIDAR_RANGE_MM = MAX_LIDAR_RANGE_M * 1000.0
 NUM_LIDAR_RAYS = 3000
 TRACED_LIDAR_RAYS = 360
 IMG_SIZE = 64
@@ -31,6 +35,14 @@ class PolicyRunner:
 
     def __init__(self, checkpoint_path: str, device: str = "cuda") -> None:
         self.device = torch.device(device)
+        checkpoint_name = os.path.basename(checkpoint_path).lower()
+        self.depth_range_m = (
+            TRACE_DEPTH_RANGE_M
+            if "depthonly_curriculum" in checkpoint_name
+            else DEFAULT_DEPTH_RANGE_M
+        )
+        self.depth_range_mm = self.depth_range_m * 1000.0
+        print(f"Input depth/state range: {self.depth_range_m:g} m; LiDAR range: {MAX_LIDAR_RANGE_M:g} m")
         if self.device.type == "cuda" and torch.cuda.is_available():
             torch.cuda.set_per_process_memory_fraction(GPU_MEMORY_FRACTION)
             print(f"GPU memory capped at {GPU_MEMORY_FRACTION:.0%} of available")
@@ -149,7 +161,7 @@ class PolicyRunner:
         """(H, W) uint16 mm → (1, 1, 64, 64) normalized."""
         depth_f = depth_mm.astype(np.float32)
         depth_small = cv2.resize(depth_f, (IMG_SIZE, IMG_SIZE), interpolation=cv2.INTER_NEAREST)
-        depth_norm = np.clip(depth_small, 0, MAX_DEPTH_MM) / MAX_DEPTH_MM
+        depth_norm = np.clip(depth_small, 0, self.depth_range_mm) / self.depth_range_mm
         return torch.from_numpy(depth_norm[np.newaxis, np.newaxis]).to(self.device)
 
     def preprocess_rgbd(self, rgb_bgr: np.ndarray, depth_mm: np.ndarray) -> torch.Tensor:
@@ -160,7 +172,7 @@ class PolicyRunner:
 
         depth_f = depth_mm.astype(np.float32)
         depth_small = cv2.resize(depth_f, (IMG_SIZE, IMG_SIZE), interpolation=cv2.INTER_NEAREST)
-        depth_norm = np.clip(depth_small, 0, MAX_DEPTH_MM) / MAX_DEPTH_MM
+        depth_norm = np.clip(depth_small, 0, self.depth_range_mm) / self.depth_range_mm
 
         # Stack as (H, W, 4) then transpose to (4, H, W)
         rgbd = np.concatenate([rgb_norm, depth_norm[:, :, np.newaxis]], axis=2)
@@ -170,26 +182,33 @@ class PolicyRunner:
     # ── LiDAR preprocessing ─────────────────────────────────────────
 
     def preprocess_lidar(self, scan_points: list[dict]) -> torch.Tensor:
-        """Bin scan points into 3000 fixed angular slots → (1, 3000)."""
-        ranges = np.full(NUM_LIDAR_RAYS, MAX_DEPTH_MM, dtype=np.float32)
+        """Bin scan points into 3000 fixed angular slots → (1, 3000).
+
+        Isaac Sim trains with horizontal_fov_range=(-180, 180), so index 0
+        corresponds to -180° (behind the robot) and index N/2 to 0° (forward).
+        Real RPLIDAR reports 0°–360° with 0° forward, so we shift by +180°.
+        """
+        ranges = np.full(NUM_LIDAR_RAYS, MAX_LIDAR_RANGE_MM, dtype=np.float32)
         for pt in scan_points:
-            slot = int(pt["angle"] * NUM_LIDAR_RAYS / 360.0) % NUM_LIDAR_RAYS
+            angle = (pt["angle"] + 180.0) % 360.0
+            slot = int(angle * NUM_LIDAR_RAYS / 360.0) % NUM_LIDAR_RAYS
             dist = float(pt["dist_mm"])
-            if 0 < dist < MAX_DEPTH_MM:
+            if 0 < dist < MAX_LIDAR_RANGE_MM:
                 ranges[slot] = min(ranges[slot], dist)
-        ranges /= MAX_DEPTH_MM
+        ranges /= MAX_LIDAR_RANGE_MM
         return torch.from_numpy(ranges).unsqueeze(0).to(self.device)
 
     def _preprocess_lidar_traced(self, scan_points: list[dict]) -> torch.Tensor:
         """Bin scan points into 360 angular slots for traced models."""
         n = TRACED_LIDAR_RAYS
-        ranges = np.full(n, MAX_DEPTH_MM, dtype=np.float32)
+        ranges = np.full(n, MAX_LIDAR_RANGE_MM, dtype=np.float32)
         for pt in scan_points:
-            slot = int(pt["angle"] * n / 360.0) % n
+            angle = (pt["angle"] + 180.0) % 360.0
+            slot = int(angle * n / 360.0) % n
             dist = float(pt["dist_mm"])
-            if 0 < dist < MAX_DEPTH_MM:
+            if 0 < dist < MAX_LIDAR_RANGE_MM:
                 ranges[slot] = min(ranges[slot], dist)
-        ranges /= MAX_DEPTH_MM
+        ranges /= MAX_LIDAR_RANGE_MM
         return torch.from_numpy(ranges).unsqueeze(0).to(self.device)
 
     # ── State vector computation ─────────────────────────────────────
@@ -205,14 +224,14 @@ class PolicyRunner:
             max(0, px - r_half):min(fw, px + r_half),
         ].astype(np.float32)
         valid = roi[roi > 0]
-        return float(np.median(valid)) / 1000.0 if len(valid) > 0 else MAX_DEPTH_M
+        return float(np.median(valid)) / 1000.0 if len(valid) > 0 else self.depth_range_m
 
     def compute_state_6d(
         self, cx: float | None, cy: float | None, w: float | None, h: float | None,
         depth_mm: np.ndarray, desired_dist_m: float,
     ) -> torch.Tensor:
         """6D state for depth-only compbottleneck model."""
-        desired_dist_norm = desired_dist_m / MAX_DEPTH_M
+        desired_dist_norm = desired_dist_m / self.depth_range_m
         if cx is None:
             s = [0.0, 0.0, 1.0, desired_dist_norm, 0.0, 1.0]
         else:
@@ -220,7 +239,7 @@ class PolicyRunner:
             s = [
                 min(w * h, 1.0),
                 (cx - 0.5) / 0.5,
-                min(depth_m / MAX_DEPTH_M, 1.0),
+                min(depth_m / self.depth_range_m, 1.0),
                 desired_dist_norm,
                 min(w, 1.0),
                 0.0,
@@ -232,14 +251,14 @@ class PolicyRunner:
         depth_mm: np.ndarray, desired_dist_m: float,
     ) -> torch.Tensor:
         """4D state for RGBD trace model (bearing, dist, known, desired_dist)."""
-        desired_dist_norm = desired_dist_m / MAX_DEPTH_M
+        desired_dist_norm = desired_dist_m / self.depth_range_m
         if cx is None:
             s = [0.0, 1.0, 0.0, desired_dist_norm]
         else:
             depth_m = self._sample_target_depth(cx, cy, w, h, depth_mm)
             s = [
                 (cx - 0.5) / 0.5,
-                min(depth_m / MAX_DEPTH_M, 1.0),
+                min(depth_m / self.depth_range_m, 1.0),
                 1.0,
                 desired_dist_norm,
             ]
@@ -254,12 +273,43 @@ class PolicyRunner:
             s = [0.0, 1.0, 0.0]
         else:
             depth_m = self._sample_target_depth(cx, cy, w, h, depth_mm)
-            s = [(cx - 0.5) / 0.5, min(depth_m / MAX_DEPTH_M, 1.0), 1.0]
+            s = [(cx - 0.5) / 0.5, min(depth_m / self.depth_range_m, 1.0), 1.0]
         return torch.tensor([s], dtype=torch.float32, device=self.device)
 
-    def compute_state(self, cx, cy, w, h, depth_mm, desired_dist_m) -> torch.Tensor:
+    def compute_lidar_sectors(
+        self, scan_points: list[dict], num_sectors: int = 8,
+    ) -> list[float]:
+        """Compute min normalized distance per angular sector from LiDAR scan."""
+        sectors = [1.0] * num_sectors
+        for pt in scan_points:
+            angle = (pt["angle"] + 180.0) % 360.0
+            sector_idx = int(angle * num_sectors / 360.0) % num_sectors
+            dist = float(pt["dist_mm"])
+            if 0 < dist < MAX_LIDAR_RANGE_MM:
+                norm_dist = dist / MAX_LIDAR_RANGE_MM
+                sectors[sector_idx] = min(sectors[sector_idx], norm_dist)
+        return sectors
+
+    def compute_state_sectored(
+        self, cx: float | None, cy: float | None, w: float | None, h: float | None,
+        depth_mm: np.ndarray, desired_dist_m: float,
+        scan_points: list[dict] | None = None,
+        num_sectors: int = 12,
+    ) -> torch.Tensor:
+        """6D base + N LiDAR sector min distances."""
+        base = self.compute_state_6d(cx, cy, w, h, depth_mm, desired_dist_m)
+        sectors = self.compute_lidar_sectors(scan_points or [], num_sectors)
+        sector_t = torch.tensor([sectors], dtype=torch.float32, device=self.device)
+        return torch.cat([base, sector_t], dim=-1)
+
+    def compute_state(self, cx, cy, w, h, depth_mm, desired_dist_m,
+                      scan_points=None) -> torch.Tensor:
         dim = self.model.state_dim
-        if dim == 6:
+        if dim > 6 and (dim - 6) in (8, 12, 16, 24, 32):
+            return self.compute_state_sectored(
+                cx, cy, w, h, depth_mm, desired_dist_m, scan_points, num_sectors=dim - 6,
+            )
+        elif dim == 6:
             return self.compute_state_6d(cx, cy, w, h, depth_mm, desired_dist_m)
         elif dim == 4:
             return self.compute_state_4d(cx, cy, w, h, depth_mm, desired_dist_m)
@@ -301,7 +351,7 @@ class PolicyRunner:
         else:
             image = self.preprocess_depth(depth_mm)
 
-        state = self.compute_state(cx, cy, w, h, depth_mm, desired_dist_m)
+        state = self.compute_state(cx, cy, w, h, depth_mm, desired_dist_m, scan_points)
 
         if self.traced is not None:
             lidar = self._preprocess_lidar_traced(scan_points)

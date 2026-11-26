@@ -1,6 +1,6 @@
 """Headless RL policy test simulator.
 
-Skips camera/CSRT entirely — generates synthetic depth frames and state
+Skips camera/tracker entirely — generates synthetic depth frames and state
 vectors from a simulated 2D scene, runs the real policy, and applies
 motor commands back to the sim. Opens a pygame window showing the
 top-down scene so you can watch the robot react.
@@ -56,9 +56,14 @@ TRACK_M = 0.3               # distance between front and back wheels
 # Action scaling (must match rl_track.py)
 FORWARD_SCALE = 1.0
 STRAFE_SCALE = 1.0
-YAW_SCALE = 1.0
-MAX_RANGE_SPEED = 10.0      # turns/s — full ODrive range
-MAX_ROT_SPEED = 10.0        # turns/s — full ODrive range
+YAW_SCALE = -1.0
+MAX_RANGE_SPEED = 7.0       # turns/s
+MAX_ROT_SPEED = 7.0         # turns/s
+
+# Reactive obstacle avoidance (must match rl_track.py)
+OBSTACLE_DANGER_MM = 400
+OBSTACLE_CRITICAL_MM = 200
+OBSTACLE_SECTOR_DEG = 60
 
 
 def _clamp(v, lo, hi):
@@ -127,6 +132,58 @@ class SimTarget:
         self.dragging = False
 
 
+class SimObstacle:
+    """Draggable obstacle in the world."""
+
+    def __init__(self, x: float, y: float):
+        self.x = x
+        self.y = y
+        self.dragging = False
+
+
+def reactive_avoid(raw_actions, scan_points):
+    """Reactive obstacle avoidance — mirrors rl_track.py _reactive_avoid."""
+    if not scan_points:
+        return raw_actions, False
+
+    repulse_fwd = 0.0
+    repulse_strafe = 0.0
+    max_strength = 0.0
+
+    for pt in scan_points:
+        a = pt["angle"] % 360.0
+        d = float(pt["dist_mm"])
+        if d <= 0 or d > OBSTACLE_DANGER_MM:
+            continue
+
+        strength = _clamp(1.0 - (d - OBSTACLE_CRITICAL_MM) /
+                          (OBSTACLE_DANGER_MM - OBSTACLE_CRITICAL_MM), 0.0, 1.0)
+        max_strength = max(max_strength, strength)
+
+        a_rad = math.radians(a)
+        repulse_fwd -= math.cos(a_rad) * strength
+        repulse_strafe -= math.sin(a_rad) * strength
+
+    if max_strength < 0.01:
+        return raw_actions, False
+
+    mag = math.sqrt(repulse_fwd ** 2 + repulse_strafe ** 2)
+    if mag > 0.01:
+        repulse_fwd = repulse_fwd / mag * max_strength * 0.8
+        repulse_strafe = repulse_strafe / mag * max_strength * 0.8
+
+    actions = list(raw_actions)
+
+    if repulse_fwd < 0 and actions[0] > 0:
+        actions[0] *= (1.0 - max_strength)
+
+    actions[0] += repulse_fwd
+    if len(actions) >= 2:
+        actions[1] += repulse_strafe
+
+    return actions, True
+
+
 def scale_actions(raw_actions):
     """Same as rl_track.py _scale_actions — keep in sync."""
     if len(raw_actions) == 2:
@@ -158,6 +215,7 @@ CAMERA_H = 0.3      # meters, camera height above floor
 DEPTH_VIS_MAX = 5000 # mm, colormap ceiling for visualization
 
 def generate_synthetic_depth(robot: SimRobot, target: SimTarget,
+                             obstacles=None,
                              img_w: int = 320, img_h: int = 240) -> np.ndarray:
     """Generate a synthetic depth frame with floor, walls, and target."""
     fov_h_rad = math.radians(87)
@@ -222,35 +280,76 @@ def generate_synthetic_depth(robot: SimRobot, target: SimTarget,
         mask = ((xx - cx_i) ** 2 + (yy - cy_i) ** 2) <= r * r
         depth[mask] = depth_mm
 
+    # Obstacle objects in depth
+    for obs in (obstacles or []):
+        odx = obs.x - robot.x
+        ody = obs.y - robot.y
+        olx = odx * cos_h - ody * sin_h
+        oly = odx * sin_h + ody * cos_h
+        odist = max(math.sqrt(odx ** 2 + ody ** 2), 0.05)
+        if olx > 0.1:
+            ocx = img_w / 2 + (oly / olx) * (img_w / 2) / tan_hh
+            ocy = img_h / 2
+            obs_size_m = 0.3
+            obs_px = int((obs_size_m / odist) * (img_w / 2) / tan_hh)
+            obs_px = max(3, min(obs_px, img_w))
+            ocxi, ocyi = int(ocx), int(ocy)
+            orr = obs_px // 2
+            yy, xx = np.ogrid[0:img_h, 0:img_w]
+            omask = ((xx - ocxi) ** 2 + (yy - ocyi) ** 2) <= orr * orr
+            od_mm = int(odist * 1000)
+            depth[omask] = np.minimum(depth[omask], od_mm)
+
     return depth
 
 
 def generate_synthetic_rgb(robot: SimRobot, target: SimTarget,
+                           obstacles=None,
                            img_w: int = 320, img_h: int = 240) -> np.ndarray:
-    """Generate a synthetic RGB frame with green target overlay."""
+    """Generate a synthetic RGB frame with green target and red obstacles."""
     frame = np.zeros((img_h, img_w, 3), dtype=np.uint8)
     frame[:] = (60, 60, 60)  # gray background
 
-    dx = target.x - robot.x
-    dy = target.y - robot.y
     cos_h = math.cos(-robot.heading)
     sin_h = math.sin(-robot.heading)
+    fov_h = 87
+    tan_hh = math.tan(math.radians(fov_h / 2))
+
+    # Target (green)
+    dx = target.x - robot.x
+    dy = target.y - robot.y
     local_x = dx * cos_h - dy * sin_h
     local_y = dx * sin_h + dy * cos_h
     dist = max(math.sqrt(dx ** 2 + dy ** 2), 0.05)
 
     if local_x > 0.01:
-        fov_h = 87
-        cx_img = img_w / 2 + (local_y / local_x) * (img_w / 2) / math.tan(math.radians(fov_h / 2))
+        cx_img = img_w / 2 + (local_y / local_x) * (img_w / 2) / tan_hh
         cy_img = img_h / 2
         target_size_m = 0.3
-        target_size_px = int((target_size_m / dist) * (img_w / 2) / math.tan(math.radians(fov_h / 2)))
+        target_size_px = int((target_size_m / dist) * (img_w / 2) / tan_hh)
         target_size_px = max(5, min(target_size_px, img_w))
         r = target_size_px // 2
         cv2.rectangle(frame,
                       (int(cx_img) - r, int(cy_img) - r),
                       (int(cx_img) + r, int(cy_img) + r),
                       (0, 255, 0), -1)
+
+    # Obstacles (red)
+    for obs in (obstacles or []):
+        odx = obs.x - robot.x
+        ody = obs.y - robot.y
+        olx = odx * cos_h - ody * sin_h
+        oly = odx * sin_h + ody * cos_h
+        odist = max(math.sqrt(odx ** 2 + ody ** 2), 0.05)
+        if olx > 0.1:
+            ocx = img_w / 2 + (oly / olx) * (img_w / 2) / tan_hh
+            ocy = img_h / 2
+            obs_size_m = 0.3
+            obs_px = int((obs_size_m / odist) * (img_w / 2) / tan_hh)
+            obs_px = max(3, min(obs_px, img_w))
+            orr = obs_px // 2
+            cv2.circle(frame, (int(ocx), int(ocy)), orr, (0, 0, 255), -1)
+            cv2.circle(frame, (int(ocx), int(ocy)), orr, (100, 100, 255), 2)
 
     return frame
 
@@ -289,25 +388,44 @@ def compute_bbox(robot: SimRobot, target: SimTarget, img_w=320, img_h=240):
     return b
 
 
-def generate_lidar_scan(robot: SimRobot, target: SimTarget, num_points=100):
-    """Generate a fake lidar scan — empty except for the target."""
+def generate_lidar_scan(robot: SimRobot, target: SimTarget,
+                        obstacles=None, num_points=100):
+    """Generate a fake lidar scan with target and obstacles."""
     points = []
     dx = target.x - robot.x
     dy = target.y - robot.y
     dist = math.sqrt(dx ** 2 + dy ** 2)
     angle = math.degrees(math.atan2(dy, dx) - robot.heading) % 360
 
-    # Put a cluster of points around the target
+    # Target cluster
     for i in range(-5, 6):
         a = (angle + i * 0.5) % 360
         d = dist + np.random.uniform(-0.02, 0.02)
         points.append({"angle": a, "dist_mm": max(10, d * 1000)})
+
+    # Obstacle returns
+    for obs in (obstacles or []):
+        ox, oy = obs.x, obs.y
+        odx = ox - robot.x
+        ody = oy - robot.y
+        odist = math.sqrt(odx ** 2 + ody ** 2)
+        if odist < 0.01:
+            continue
+        oangle = math.degrees(math.atan2(ody, odx) - robot.heading) % 360
+        obs_radius = 0.15  # meters
+        angular_size = math.degrees(math.atan2(obs_radius, odist))
+        for i in range(int(-angular_size * 2), int(angular_size * 2) + 1):
+            a = (oangle + i * 0.5) % 360
+            d = odist + np.random.uniform(-0.02, 0.02)
+            points.append({"angle": a, "dist_mm": max(10, d * 1000)})
+
     return points
 
 
 def draw_scene(screen, robot: SimRobot, target: SimTarget,
                raw_actions, motor_cmd, desired_dist, info_lines,
-               depth_frame=None, lidar_scan=None):
+               depth_frame=None, lidar_scan=None,
+               obstacles=None, avoiding=False):
     """Draw 2D top-down scene with pygame."""
     import pygame
 
@@ -368,6 +486,22 @@ def draw_scene(screen, robot: SimRobot, target: SimTarget,
     tpos = world_to_screen(target.x, target.y)
     pygame.draw.circle(screen, (0, 255, 0), tpos, 12, 0)
     pygame.draw.circle(screen, (255, 255, 255), tpos, 12, 2)
+
+    # Obstacles
+    for obs in (obstacles or []):
+        opos = world_to_screen(obs.x, obs.y)
+        odist = math.sqrt((obs.x - robot.x) ** 2 + (obs.y - robot.y) ** 2)
+        color = (255, 60, 60) if odist * 1000 < OBSTACLE_DANGER_MM else (180, 80, 80)
+        pygame.draw.circle(screen, color, opos, int(0.15 * WORLD_SCALE), 0)
+        pygame.draw.circle(screen, (255, 255, 255), opos, int(0.15 * WORLD_SCALE), 1)
+        if obs.dragging:
+            pygame.draw.circle(screen, (255, 255, 0), opos, int(0.15 * WORLD_SCALE) + 3, 2)
+
+    # Avoidance indicator
+    if avoiding:
+        font_warn = pygame.font.SysFont("consolas", 18, bold=True)
+        warn_surf = font_warn.render("AVOIDING", True, (255, 60, 60))
+        screen.blit(warn_surf, (8, WINDOW_H - 30))
 
     # Distance line
     dist = math.sqrt((target.x - robot.x) ** 2 + (target.y - robot.y) ** 2)
@@ -555,14 +689,19 @@ def main():
     ckpt = args.checkpoint
     if not ckpt:
         ckpt_dir = os.path.join(os.path.dirname(__file__), "checkpoints")
-        candidates = sorted(
-            f for f in os.listdir(ckpt_dir)
-            if f.endswith(".pt") and "_traced" not in f
-        )
-        if not candidates:
-            print("No checkpoints found!")
-            return
-        ckpt = os.path.join(ckpt_dir, candidates[0])
+        preferred = os.path.join(ckpt_dir, "depthonly_curriculum.pt")
+        preferred_traced = os.path.join(ckpt_dir, "depthonly_curriculum_traced_fp16.pt")
+        if os.path.isfile(preferred) or os.path.isfile(preferred_traced):
+            ckpt = preferred
+        else:
+            candidates = sorted(
+                f for f in os.listdir(ckpt_dir)
+                if f.endswith(".pt") and "_traced" not in f
+            )
+            if not candidates:
+                print("No checkpoints found!")
+                return
+            ckpt = os.path.join(ckpt_dir, candidates[0])
     print(f"Loading: {ckpt}")
 
     runner = PolicyRunner(ckpt, device=args.device)
@@ -576,14 +715,22 @@ def main():
     robot = SimRobot(x=0.0, y=0.0, heading=0.0)
     target = SimTarget(x=args.target_dist, y=0.0)
     desired_dist = args.desired_dist
+    # Draggable obstacles — placed around the path to test avoidance
+    obstacles = [
+        SimObstacle(1.0, 0.4),
+        SimObstacle(1.0, -0.4),
+        SimObstacle(0.0, 0.6),
+        SimObstacle(-0.5, 0.0),
+    ]
 
     clock = pygame.time.Clock()
     policy_interval = 1.0 / POLICY_HZ
     last_policy_tick = 0.0
     raw_actions = [0.0, 0.0, 0.0]
     motor_cmd = (0.0, 0.0, 0.0, 0.0)
-    last_depth = generate_synthetic_depth(robot, target)
-    last_scan = generate_lidar_scan(robot, target) if runner.has_lidar else []
+    avoiding = False
+    last_depth = generate_synthetic_depth(robot, target, obstacles)
+    last_scan = generate_lidar_scan(robot, target, obstacles) if runner.has_lidar else []
     paused = False
     running = True
 
@@ -619,45 +766,60 @@ def main():
                     _ox = SCENE_W // 2 - int(robot.x * WORLD_SCALE)
                     _oy = WINDOW_H // 2 + int(robot.y * WORLD_SCALE)
                     mx, my = event.pos
+                    # Check target first
                     tw = int(_ox + target.x * WORLD_SCALE)
                     th = int(_oy - target.y * WORLD_SCALE)
                     if abs(mx - tw) < 20 and abs(my - th) < 20:
                         target.dragging = True
+                    else:
+                        # Check obstacles
+                        for obs in obstacles:
+                            ow = int(_ox + obs.x * WORLD_SCALE)
+                            oh = int(_oy - obs.y * WORLD_SCALE)
+                            if abs(mx - ow) < 20 and abs(my - oh) < 20:
+                                obs.dragging = True
+                                break
             elif event.type == pygame.MOUSEBUTTONUP:
                 target.dragging = False
+                for obs in obstacles:
+                    obs.dragging = False
             elif event.type == pygame.MOUSEMOTION:
+                _ox = SCENE_W // 2 - int(robot.x * WORLD_SCALE)
+                _oy = WINDOW_H // 2 + int(robot.y * WORLD_SCALE)
+                mx, my = event.pos
                 if target.dragging:
-                    _ox = SCENE_W // 2 - int(robot.x * WORLD_SCALE)
-                    _oy = WINDOW_H // 2 + int(robot.y * WORLD_SCALE)
-                    mx, my = event.pos
                     target.x = (mx - _ox) / WORLD_SCALE
                     target.y = -(my - _oy) / WORLD_SCALE
+                for obs in obstacles:
+                    if obs.dragging:
+                        obs.x = (mx - _ox) / WORLD_SCALE
+                        obs.y = -(my - _oy) / WORLD_SCALE
 
         if not paused and now - last_policy_tick >= policy_interval:
             # Generate synthetic inputs
-            depth = generate_synthetic_depth(robot, target)
-            rgb = generate_synthetic_rgb(robot, target)
+            depth = generate_synthetic_depth(robot, target, obstacles)
+            rgb = generate_synthetic_rgb(robot, target, obstacles)
             bbox = compute_bbox(robot, target)
-            scan = generate_lidar_scan(robot, target) if runner.has_lidar else []
+            scan = generate_lidar_scan(robot, target, obstacles) if runner.has_lidar else []
             last_depth = depth
             last_scan = scan
 
             if bbox is not None:
                 raw_actions = runner.step(rgb, depth, bbox, scan, desired_dist)
-                vx, vy, ts, rs = scale_actions(raw_actions)
-                motor_cmd = (vx, vy, ts, rs)
-
-                if udp_sock and (abs(ts) > 0.01 or abs(rs) > 0.01):
-                    pkt = b"D" + struct.pack("<ffff", vx, vy, ts, rs)
-                    udp_sock.sendto(pkt, udp_dest)
-                elif udp_sock:
-                    udp_sock.sendto(b"S", udp_dest)
             else:
                 raw_actions = [0.0] * runner.action_dim
-                motor_cmd = (0.0, 0.0, 0.0, 0.0)
                 runner.reset()
-                if udp_sock:
-                    udp_sock.sendto(b"S", udp_dest)
+
+            # Reactive avoidance runs always — even without a target
+            raw_actions, avoiding = reactive_avoid(raw_actions, scan)
+            vx, vy, ts, rs = scale_actions(raw_actions)
+            motor_cmd = (vx, vy, ts, rs)
+
+            if udp_sock and (abs(ts) > 0.01 or abs(rs) > 0.01):
+                pkt = b"D" + struct.pack("<ffff", vx, vy, ts, rs)
+                udp_sock.sendto(pkt, udp_dest)
+            elif udp_sock:
+                udp_sock.sendto(b"S", udp_dest)
 
             last_policy_tick = now
 
@@ -666,13 +828,14 @@ def main():
             robot.apply_motor_command(*motor_cmd, dt)
 
         # Regenerate sensor feeds every frame so they track robot movement
-        last_depth = generate_synthetic_depth(robot, target)
+        last_depth = generate_synthetic_depth(robot, target, obstacles)
         if runner.has_lidar:
-            last_scan = generate_lidar_scan(robot, target)
+            last_scan = generate_lidar_scan(robot, target, obstacles)
 
         draw_scene(screen, robot, target, raw_actions, motor_cmd,
                    desired_dist, info_lines,
-                   depth_frame=last_depth, lidar_scan=last_scan)
+                   depth_frame=last_depth, lidar_scan=last_scan,
+                   obstacles=obstacles, avoiding=avoiding)
 
     # Stop motors on exit
     if udp_sock:

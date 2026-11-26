@@ -1,12 +1,12 @@
 """
 RL policy tracking endpoints.
 
-Uses CSRT for target detection, paints the bounding box green, and feeds the
+Uses SIFT for target detection, paints the bounding box green, and feeds the
 modified frame to a trained recurrent RL policy (CNN+LSTM) that outputs motor
 commands. The policy was trained in IsaacLab simulation to follow green targets.
 
 Pipeline:
-    CSRT (every frame) → green overlay → RL policy (4 Hz) → UDP motor commands
+    SIFT (every frame) → green overlay → RL policy (15 Hz) → UDP motor commands
 """
 
 import math
@@ -40,7 +40,7 @@ _state = {
     "desired_dist": 1.0,
     "target_depth": 0,      # mm
     "cur_depth": 0,          # mm
-    "csrt_ms": 0.0,
+    "tracker_ms": 0.0,
     "preprocess_ms": 0.0,
     "policy_ms": 0.0,
     "total_ms": 0.0,
@@ -80,9 +80,9 @@ def set_lidar_reader(lidar):
 POLICY_HZ = 15
 
 # Action scaling — policy outputs [-1,1] are normalized, scale up for real robot
-FORWARD_SCALE = 5.0
-STRAFE_SCALE = 5.0
-YAW_SCALE = 5.0
+FORWARD_SCALE = 1.0
+STRAFE_SCALE = 1.0
+YAW_SCALE = -1.0
 
 # Motor limits in turns/s (ODrive velocity units)
 MAX_ROT_SPEED = 10.0
@@ -91,6 +91,11 @@ MAX_RANGE_SPEED = 10.0
 # Target loss timeouts
 COAST_TIMEOUT = 0.5     # seconds: coast on last command
 STOP_TIMEOUT = 2.0      # seconds: stop and reset LSTM
+
+# Reactive obstacle avoidance — overrides policy when lidar sees close objects
+OBSTACLE_DANGER_MM = 400     # mm: start avoiding
+OBSTACLE_CRITICAL_MM = 200   # mm: hard stop forward, full strafe
+OBSTACLE_SECTOR_DEG = 60     # degrees: front sector half-width
 
 # Default model checkpoint — PolicyRunner handles traced-only files
 _CKPT_DIR = os.path.join(os.path.dirname(__file__), "..", "..", "rl_policy", "checkpoints")
@@ -117,6 +122,62 @@ def _clamp(value, low, high):
 def _draw_text(img, text, pos, color):
     cv2.putText(img, text, pos, cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 0), 2, cv2.LINE_AA)
     cv2.putText(img, text, pos, cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 1, cv2.LINE_AA)
+
+
+def _reactive_avoid(raw_actions, scan_points):
+    """Inject reactive strafe/slowdown when lidar detects nearby obstacles.
+
+    Checks all directions around the robot. Computes a repulsion vector
+    from all obstacles within the danger zone and blends it into the
+    policy's action output.
+
+    Returns modified raw_actions list and whether avoidance is active.
+    """
+    if not scan_points:
+        return raw_actions, False
+
+    # Accumulate a repulsion vector from all close obstacles
+    repulse_fwd = 0.0   # positive = push robot forward, negative = push backward
+    repulse_strafe = 0.0  # positive = push left, negative = push right
+    max_strength = 0.0
+
+    for pt in scan_points:
+        a = pt["angle"] % 360.0
+        d = float(pt["dist_mm"])
+        if d <= 0 or d > OBSTACLE_DANGER_MM:
+            continue
+
+        strength = _clamp(1.0 - (d - OBSTACLE_CRITICAL_MM) /
+                          (OBSTACLE_DANGER_MM - OBSTACLE_CRITICAL_MM), 0.0, 1.0)
+        max_strength = max(max_strength, strength)
+
+        # Obstacle at angle a → push robot in opposite direction
+        # 0° = forward, 90° = left, 180° = behind, 270° = right
+        a_rad = math.radians(a)
+        repulse_fwd -= math.cos(a_rad) * strength
+        repulse_strafe -= math.sin(a_rad) * strength
+
+    if max_strength < 0.01:
+        return raw_actions, False
+
+    # Normalize repulsion to max impulse of 0.8
+    mag = math.sqrt(repulse_fwd ** 2 + repulse_strafe ** 2)
+    if mag > 0.01:
+        repulse_fwd = repulse_fwd / mag * max_strength * 0.8
+        repulse_strafe = repulse_strafe / mag * max_strength * 0.8
+
+    actions = list(raw_actions)
+
+    # Dampen policy's forward when pushing backward
+    if repulse_fwd < 0 and actions[0] > 0:
+        actions[0] *= (1.0 - max_strength)
+
+    # Blend repulsion into actions
+    actions[0] += repulse_fwd
+    if len(actions) >= 2:
+        actions[1] += repulse_strafe
+
+    return actions, True
 
 
 def _scale_actions(raw_actions):
@@ -188,7 +249,7 @@ def _load_model_async(checkpoint_path, result_holder, stop_event):
         result_holder[0] = runner
 
 
-def _rl_tracker_loop(desired_dist_m, checkpoint_path, backend="csrt"):
+def _rl_tracker_loop(desired_dist_m, checkpoint_path, backend="sift"):
     global _latest_jpeg, _latest_depth_jpeg, _reset_flag
 
     with _lock:
@@ -331,36 +392,35 @@ def _rl_tracker_loop(desired_dist_m, checkpoint_path, backend="csrt"):
                 continue
             frozen_jpeg = None
 
-            # ── Run CSRT on every frame ──
+            # ── Run tracker on every frame ──
             display = frame.copy()
             bbox = None
 
             if has_reference and runner is not None:
-                t_csrt = time.perf_counter()
+                t_track = time.perf_counter()
                 bbox = tracker.find(frame)
-                csrt_ms = (time.perf_counter() - t_csrt) * 1000.0
+                tracker_ms = (time.perf_counter() - t_track) * 1000.0
                 if bbox is not None:
                     last_seen = now
 
                 # ── Run policy at POLICY_HZ ──
                 if now - last_policy_tick >= policy_interval:
+                    # Get lidar scan (always, for reactive avoidance)
+                    scan_points = []
+                    lidar_ok = False
+                    if _lidar_reader is not None:
+                        scan_data = _lidar_reader.get_scan()
+                        scan_points = scan_data.get("points", [])
+                        lidar_ok = len(scan_points) > 0
+
                     if bbox is not None:
                         confidence = bbox.confidence
-
-                        # Get lidar scan
-                        scan_points = []
-                        lidar_ok = False
-                        if _lidar_reader is not None:
-                            scan_data = _lidar_reader.get_scan()
-                            scan_points = scan_data.get("points", [])
-                            lidar_ok = len(scan_points) > 0
 
                         # Provide depth (zeros if no RealSense)
                         if depth_frame is None:
                             depth_frame = np.zeros((fh, fw), dtype=np.uint16)
 
                         t_pre = time.perf_counter()
-                        # Run policy
                         raw_actions = runner.step(
                             frame, depth_frame, bbox, scan_points, desired_dist_m,
                         )
@@ -371,19 +431,6 @@ def _rl_tracker_loop(desired_dist_m, checkpoint_path, backend="csrt"):
                             raw_actions = [0.0] * len(raw_actions)
                             with _lock:
                                 _state["safety_active"] = True
-
-                        # Scale actions to motor commands
-                        vx, vy, trans_speed, rot_speed = _scale_actions(raw_actions)
-                        motor_cmd = [vx, vy, trans_speed, rot_speed]
-
-                        if abs(trans_speed) < 0.01 and abs(rot_speed) < 0.01:
-                            if driving:
-                                udp_sock.sendto(b"S", udp_dest)
-                                driving = False
-                        else:
-                            pkt = b"D" + struct.pack("<ffff", vx, vy, trans_speed, rot_speed)
-                            udp_sock.sendto(pkt, udp_dest)
-                            driving = True
 
                         # Sample current depth at target
                         cur_depth = 0
@@ -397,39 +444,55 @@ def _rl_tracker_loop(desired_dist_m, checkpoint_path, backend="csrt"):
                             ]
                             valid = roi[roi > 0]
                             cur_depth = int(np.median(valid)) if len(valid) > 0 else 0
-
-                        total_ms = csrt_ms + policy_ms
-                        with _lock:
-                            _state.update(
-                                status="tracking",
-                                confidence=confidence,
-                                actions=raw_actions,
-                                lstm_step=runner.step_count,
-                                cur_depth=cur_depth,
-                                csrt_ms=round(csrt_ms, 1),
-                                policy_ms=round(policy_ms, 1),
-                                total_ms=round(total_ms, 1),
-                                motor_cmd=motor_cmd,
-                                safety_active=False,
-                            )
                     else:
-                        # Target lost — graduated fallback
+                        # Target lost
+                        raw_actions = [0.0, 0.0, 0.0]
+                        policy_ms = 0.0
+                        confidence = 0.0
+                        cur_depth = 0
                         time_lost = now - last_seen
-                        if time_lost >= COAST_TIMEOUT:
-                            if driving:
-                                udp_sock.sendto(b"S", udp_dest)
-                                driving = False
                         if time_lost >= STOP_TIMEOUT:
                             runner.reset()
 
-                        status = "lost" if (now - last_seen) >= COAST_TIMEOUT else "tracking"
-                        with _lock:
-                            _state.update(
-                                status=status,
-                                confidence=0.0,
-                                actions=[0.0, 0.0, 0.0],
-                                lstm_step=runner.step_count,
-                            )
+                    # Reactive avoidance runs always — even without a target
+                    raw_actions, avoiding = _reactive_avoid(raw_actions, scan_points)
+
+                    # Scale actions to motor commands
+                    vx, vy, trans_speed, rot_speed = _scale_actions(raw_actions)
+                    motor_cmd = [vx, vy, trans_speed, rot_speed]
+
+                    # Send motor command (or stop if negligible and target lost)
+                    if bbox is None and not avoiding:
+                        time_lost = now - last_seen
+                        if time_lost >= COAST_TIMEOUT and driving:
+                            udp_sock.sendto(b"S", udp_dest)
+                            driving = False
+                    elif abs(trans_speed) < 0.01 and abs(rot_speed) < 0.01:
+                        if driving:
+                            udp_sock.sendto(b"S", udp_dest)
+                            driving = False
+                    else:
+                        pkt = b"D" + struct.pack("<ffff", vx, vy, trans_speed, rot_speed)
+                        udp_sock.sendto(pkt, udp_dest)
+                        driving = True
+
+                    total_ms = tracker_ms + policy_ms
+                    status = "tracking" if bbox is not None else (
+                        "lost" if (now - last_seen) >= COAST_TIMEOUT else "tracking"
+                    )
+                    with _lock:
+                        _state.update(
+                            status=status,
+                            confidence=confidence,
+                            actions=raw_actions,
+                            lstm_step=runner.step_count,
+                            cur_depth=cur_depth,
+                            tracker_ms=round(tracker_ms, 1),
+                            policy_ms=round(policy_ms, 1),
+                            total_ms=round(total_ms, 1),
+                            motor_cmd=motor_cmd,
+                            safety_active=avoiding,
+                        )
 
                     last_policy_tick = now
 
@@ -532,7 +595,7 @@ class SetRefBody(BaseModel):
 class RLStartBody(BaseModel):
     desired_dist: float = Field(1.0, description="Target follow distance in meters")
     checkpoint: str = Field("", description="Model checkpoint path (empty = default)")
-    backend: str = Field("csrt", description="Tracker backend: csrt, orb, akaze, sift, lightglue")
+    backend: str = Field("sift", description="Tracker backend: sift, orb, akaze")
 
 
 # ── Endpoints ─────────────────────────────────────────────────────────
